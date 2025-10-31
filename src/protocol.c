@@ -139,7 +139,8 @@ static bool register_ack_waiter(
         .event = evt,
         .reply_payload = NULL,
         .reply_size = 0,
-        .received = false
+        .received = false,
+        .cancelled = false
     };
     
     *waiter_out = waiter;
@@ -192,21 +193,40 @@ kern_return_t protocol_send_with_ack(
     LOG_DEBUG_MSG("Waiting for ack (correlation_id=%llu, timeout=%ums)", 
                   correlation_id, timeout_ms);
     
-    // Wait for reply
+    // Wait for reply (released lock during wait)
     bool got_reply = event_wait_timeout(waiter->event, timeout_ms);
     
+    // CRITICAL SECTION: Mark as cancelled BEFORE checking if we got reply
+    // This prevents the race where ack arrives after timeout but before cleanup
     pthread_mutex_lock(ack_lock);
     
-    if (got_reply && waiter->received) {
+    kern_return_t result;
+    
+    if (got_reply && waiter->received && !waiter->cancelled) {
+        // Success: got reply before timeout
         LOG_INFO_MSG("Ack received (correlation_id=%llu)", correlation_id);
         *ack_payload = waiter->reply_payload;
         *ack_size = waiter->reply_size;
-        kr = KERN_SUCCESS;
+        result = KERN_SUCCESS;
     } else {
+        // Timeout or cancelled
         LOG_ERROR_MSG("Ack timeout (correlation_id=%llu)", correlation_id);
-        kr = KERN_OPERATION_TIMED_OUT;
+        
+        // Mark as cancelled so late arrivals are ignored
+        waiter->cancelled = true;
+        
+        // If reply arrived during our lock acquisition, we need to clean it up
+        if (waiter->received && waiter->reply_payload) {
+            LOG_WARN_MSG("Ack arrived during timeout handling, cleaning up (correlation_id=%llu)", 
+                        correlation_id);
+            vm_deallocate(mach_task_self(), 
+                         (vm_address_t)waiter->reply_payload, 
+                         waiter->reply_size);
+        }
+        
         *ack_payload = NULL;
         *ack_size = 0;
+        result = KERN_OPERATION_TIMED_OUT;
     }
     
     // Cleanup waiter
@@ -216,7 +236,7 @@ kern_return_t protocol_send_with_ack(
     
     pthread_mutex_unlock(ack_lock);
     
-    return kr;
+    return result;
 }
 
 kern_return_t protocol_send_ack(
@@ -276,23 +296,34 @@ static bool handle_ack_message(
     
     if (!waiter) {
         pthread_mutex_unlock(ack_lock);
-        LOG_WARN_MSG("Ack arrived too late or unknown (correlation_id=%llu)", 
+        LOG_WARN_MSG("Ack for unknown correlation_id=%llu (already cleaned up?)", 
                      payload->correlation_id);
         return false;
     }
     
-    // Store reply
+    // CRITICAL: Check if waiter was cancelled (timed out)
+    if (waiter->cancelled) {
+        pthread_mutex_unlock(ack_lock);
+        LOG_WARN_MSG("Ack arrived after timeout (correlation_id=%llu), discarding", 
+                     payload->correlation_id);
+        // Caller will deallocate the payload
+        return false;
+    }
+    
+    // Store reply - waiter is still valid
     waiter->reply_payload = payload;
     waiter->reply_size = payload_size;
     waiter->received = true;
     
-    // Signal waiter
+    // Signal waiter thread
     event_signal(waiter->event);
     
     pthread_mutex_unlock(ack_lock);
     
     LOG_DEBUG_MSG("Matched ack to waiter (correlation_id=%llu)", 
                   payload->correlation_id);
+    
+    // Return true to indicate we took ownership of the payload
     return true;
 }
 
@@ -364,10 +395,11 @@ void protocol_receive_loop(
         // Handle acknowledgments
         if (HAS_FEATURE_IACK(header->msgh_id)) {
             if (handle_ack_message(ack_pool, ack_lock, payload, payload_size)) {
-                // Ack was matched, don't deallocate (waiter will do it)
+                // Ack was matched and accepted, don't deallocate
+                // The waiter owns it now
                 continue;
             }
-            // Fall through to deallocate unmatched ack
+            // Ack was rejected (timeout/unknown), fall through to deallocate
         } else {
             // Regular message - pass to handler
             if (!handler(service_port, header, payload, payload_size, context)) {

@@ -138,6 +138,7 @@ typedef struct {
     internal_payload_t *reply_payload;
     size_t reply_size;
     bool received;
+    bool cancelled;  // Prevents use-after-free on timeout race
 } ack_waiter_t;
 
 /* ============================================================================
