@@ -332,7 +332,7 @@ void protocol_receive_loop(
         }
         
         // Check if it's our protocol message
-        if (!IS_INTERNAL_MSG(header->msgh_id)) {
+        if (!IS_THIS_PROTOCOL_MSG(header->msgh_id)) {
             // Pass to handler (might be death notification, etc.)
             handler(service_port, header, NULL, 0, context);
             continue;

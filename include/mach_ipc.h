@@ -31,8 +31,7 @@ typedef struct {
 typedef enum {
     MSG_TYPE_CONNECT = 1,
     MSG_TYPE_DISCONNECT = 2,
-    MSG_TYPE_PING = 3,
-    MSG_TYPE_USER_DEFINED = 1000
+    MSG_TYPE_PING = 3
 } message_type_t;
 
 /* Status codes */

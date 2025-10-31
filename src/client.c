@@ -109,7 +109,11 @@ static void client_message_handler(
     }
     
     // Handle our protocol messages
-    handle_user_message(client, header, payload, payload_size);
+    if (IS_INTERNAL_MSG(header->msgh_id)) {
+        
+    } else if (IS_EXTERNAL_MSG(header->msgh_id)) {
+        handle_user_message(client, header, payload, payload_size);
+    }
 }
 
 /* ============================================================================

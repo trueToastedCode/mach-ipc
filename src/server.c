@@ -244,7 +244,7 @@ static void handle_user_message(
                     &reply_size,
                     server->user_data
                 );
-                
+
                 // Send acknowledgment
                 internal_payload_t *ack = create_payload(reply_size);
                 if (ack) {
@@ -253,7 +253,7 @@ static void handle_user_message(
                     if (reply_data && reply_size > 0) {
                         copy_to_payload(ack, reply_data, reply_size);
                     }
-                    
+
                     protocol_send_ack(
                         client->port,
                         header->msgh_id,
@@ -261,7 +261,7 @@ static void handle_user_message(
                         ack,
                         sizeof(internal_payload_t) + reply_size
                     );
-                    
+
                     free_payload(ack);
                 }
                 
@@ -330,9 +330,11 @@ static void server_message_handler(
     }
     
     // Handle our protocol messages
-    if (IS_MSG_TYPE(header->msgh_id, INTERNAL_MSG_TYPE_CONNECT)) {
-        handle_connect_request(server, header, payload, payload_size);
-    } else {
+    if (IS_INTERNAL_MSG(header->msgh_id)) {
+        if (IS_INTERNAL_MSG_TYPE(header->msgh_id, INTERNAL_MSG_TYPE_CONNECT)) {
+            handle_connect_request(server, header, payload, payload_size);
+        }
+    } else if (IS_EXTERNAL_MSG(header->msgh_id)) {
         handle_user_message(server, header, payload, payload_size);
     }
 }
