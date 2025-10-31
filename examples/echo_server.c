@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #define MSG_ECHO (1)
+#define MSG_SILENT (2)
 
 static mach_server_t *g_server = NULL;
 
@@ -30,19 +31,28 @@ void on_client_disconnected(mach_server_t *server, client_handle_t client, void 
 void* on_message_with_reply(mach_server_t *server, client_handle_t client,
                             uint32_t msg_type, const void *data, size_t size,
                             size_t *reply_size, void *user_data) {
-    (void)server;
     (void)user_data;
+    void *reply = NULL;
     if (msg_type == MSG_ECHO) {
         printf("Client %u: %.*s\n", client.id, (int)size, (char*)data);
         
         // Echo back
-        char *reply = ipc_alloc(size);
+        reply = ipc_alloc(size);
         memcpy(reply, data, size);
         *reply_size = size;
-        return reply;
+
+        // also trigger send a silent msg
+        const char *silent_message = "Hello from server!";
+        printf("Sending: %s\n", silent_message);
+        int status = mach_server_send(
+            server, client, MSG_SILENT,
+            silent_message, strlen(silent_message) + 1
+        );
+        if (status != IPC_SUCCESS) {
+            printf("Silent msg failed: %s\n", ipc_status_string(status));
+        }
     }
-    
-    return NULL;
+    return reply;
 }
 
 int main() {

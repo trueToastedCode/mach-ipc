@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #define MSG_ECHO (1)
+#define MSG_SILENT (2)
 
 static volatile int running = 1;
 
@@ -26,6 +27,13 @@ void on_disconnected(mach_client_t *client, void *data) {
     running = 0;
 }
 
+void on_message(mach_client_t *client, uint32_t msg_type,
+                const void *data, size_t size, void *user_data) {
+    if (msg_type == MSG_SILENT) {
+        printf("Server: %.*s\n", (int)size, (char*)data);
+    }
+}
+
 int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
@@ -33,7 +41,7 @@ int main() {
     client_callbacks_t callbacks = {
         .on_connected = on_connected,
         .on_disconnected = on_disconnected,
-        .on_message = NULL,
+        .on_message = on_message,
         .on_message_with_reply = NULL
     };
     

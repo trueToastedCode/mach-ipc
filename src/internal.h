@@ -203,6 +203,7 @@ struct mach_client {
     
     // Message handling
     pthread_t receiver_thread;
+    dispatch_queue_t message_queue;  // Sequential processing queue
     
     // Acknowledgment tracking
     Pool ack_pool;

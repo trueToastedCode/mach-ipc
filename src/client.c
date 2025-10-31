@@ -25,55 +25,69 @@ static void handle_user_message(
     LOG_DEBUG_MSG("Received user message: type=%u, needs_reply=%d",
                  user_msg_type, needs_reply);
     
-    if (needs_reply) {
-        // Message with reply
-        if (client->callbacks.on_message_with_reply) {
-            size_t reply_size = 0;
-            void *reply_data = client->callbacks.on_message_with_reply(
-                client,
-                user_msg_type,
-                payload->data,
-                payload->data_size,
-                &reply_size,
-                client->user_data
-            );
-            
-            // Send acknowledgment
-            internal_payload_t *ack = create_payload(reply_size);
-            if (ack) {
-                ack->client_id = client->client_id;
-                ack->status = reply_data ? IPC_SUCCESS : IPC_ERROR_INTERNAL;
-                if (reply_data && reply_size > 0) {
-                    copy_to_payload(ack, reply_data, reply_size);
-                }
-                
-                protocol_send_ack(
-                    client->server_port,
-                    header->msgh_id,
-                    payload->correlation_id,
-                    ack,
-                    sizeof(internal_payload_t) + reply_size
+    // Dispatch to message queue for asynchronous processing
+    // Header will be overwritten, can only use copies in async dispatch
+    // But payload cleanup has been signaled as being handled here
+    // So it stays available without expensive copies
+    uint32_t msgh_id = header->msgh_id;
+    mach_port_t server_port = client->server_port;
+    uint64_t correlation_id = payload->correlation_id;
+    uint32_t client_id = client->client_id;
+    
+    dispatch_async(client->message_queue, ^{
+        if (needs_reply) {
+            // Message with reply
+            if (client->callbacks.on_message_with_reply) {
+                size_t reply_size = 0;
+                void *reply_data = client->callbacks.on_message_with_reply(
+                    client,
+                    user_msg_type,
+                    payload->data,
+                    payload->data_size,
+                    &reply_size,
+                    client->user_data
                 );
                 
-                free_payload(ack);
+                // Send acknowledgment
+                internal_payload_t *ack = create_payload(reply_size);
+                if (ack) {
+                    ack->client_id = client_id;
+                    ack->status = reply_data ? IPC_SUCCESS : IPC_ERROR_INTERNAL;
+                    if (reply_data && reply_size > 0) {
+                        copy_to_payload(ack, reply_data, reply_size);
+                    }
+                    
+                    protocol_send_ack(
+                        server_port,
+                        msgh_id,
+                        correlation_id,
+                        ack,
+                        sizeof(internal_payload_t) + reply_size
+                    );
+                    
+                    free_payload(ack);
+                }
+                
+                if (reply_data) {
+                    ipc_free(reply_data);
+                }
             }
-            
-            if (reply_data) {
-                ipc_free(reply_data);
+        } else {
+            // Fire-and-forget message
+            if (client->callbacks.on_message) {
+                client->callbacks.on_message(
+                    client,
+                    user_msg_type,
+                    payload->data,
+                    payload->data_size,
+                    client->user_data
+                );
             }
         }
-    } else {
-        // Fire-and-forget message
-        if (client->callbacks.on_message) {
-            client->callbacks.on_message(
-                client,
-                user_msg_type,
-                payload->data,
-                payload->data_size,
-                client->user_data
-            );
-        }
-    }
+        
+        // Cleanup payload after processing
+        vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+    });
 }
 
 static void handle_death_notification(mach_client_t *client, mach_msg_header_t *header) {
@@ -113,6 +127,7 @@ static bool client_message_handler(
         
     } else if (IS_EXTERNAL_MSG(header->msgh_id)) {
         handle_user_message(client, header, payload, payload_size);
+        return false;  // Payload cleanup handled by async dispatch
     }
 
     return true;
@@ -162,6 +177,18 @@ mach_client_t* mach_client_create(
     pool_init(&client->ack_pool, MAX_ACKS, sizeof(ack_waiter_t));
     resource_tracker_add(client->resources, RES_TYPE_POOL, &client->ack_pool,
                         (void(*)(void*))pool_free, "ack_pool");
+    
+    // Create message processing queue
+    client->message_queue = dispatch_queue_create("com.ipc.client.messages", 
+                                                  DISPATCH_QUEUE_SERIAL);
+    if (!client->message_queue) {
+        resource_tracker_cleanup_all(client->resources);
+        resource_tracker_destroy(client->resources);
+        free(client);
+        return NULL;
+    }
+    resource_tracker_add(client->resources, RES_TYPE_QUEUE, &client->message_queue,
+                        (void(*)(void*))dispatch_release, "message_queue");
     
     // Initialize lock
     pthread_mutex_init(&client->ack_lock, NULL);
@@ -438,6 +465,11 @@ void mach_client_destroy(mach_client_t *client) {
     // Wait for receiver thread
     if (client->receiver_thread) {
         pthread_join(client->receiver_thread, NULL);
+    }
+    
+    // Drain message queue before cleanup
+    if (client->message_queue) {
+        dispatch_sync(client->message_queue, ^{});
     }
     
     resource_tracker_cleanup_all(client->resources);
