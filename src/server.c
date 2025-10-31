@@ -223,6 +223,7 @@ static void handle_user_message(
     }
     
     // Extract user message type from msg_id
+    uint32_t msgh_id = header->msgh_id;
     uint32_t user_msg_type = header->msgh_id & INTERNAL_MSG_TYPE_MASK;
     bool needs_reply = HAS_FEATURE_WACK(header->msgh_id);
     
@@ -230,6 +231,9 @@ static void handle_user_message(
                  client->id, user_msg_type, needs_reply);
     
     // Dispatch to client's queue for sequential processing
+    // reminder header will overwritten, can only use copies in async dispatch
+    // but payload cleanup has been signaled as being handled here
+    // so it stays available without expensive copies
     dispatch_async(client->queue, ^{
         if (needs_reply) {
             // Message with reply
@@ -256,7 +260,7 @@ static void handle_user_message(
 
                     protocol_send_ack(
                         client->port,
-                        header->msgh_id,
+                        msgh_id,
                         payload->correlation_id,
                         ack,
                         sizeof(internal_payload_t) + reply_size
@@ -282,6 +286,7 @@ static void handle_user_message(
                 );
             }
         }
+        vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
     });
 }
 
@@ -311,7 +316,7 @@ static void handle_death_notification(mach_server_t *server, mach_msg_header_t *
     }
 }
 
-static void server_message_handler(
+static bool server_message_handler(
     mach_port_t service_port,
     mach_msg_header_t *header,
     internal_payload_t *payload,
@@ -326,7 +331,7 @@ static void server_message_handler(
         if (header->msgh_id == MACH_NOTIFY_DEAD_NAME) {
             handle_death_notification(server, header);
         }
-        return;
+        return true;
     }
     
     // Handle our protocol messages
@@ -336,7 +341,10 @@ static void server_message_handler(
         }
     } else if (IS_EXTERNAL_MSG(header->msgh_id)) {
         handle_user_message(server, header, payload, payload_size);
+        return false;
     }
+
+    return true;
 }
 
 /* ============================================================================

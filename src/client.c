@@ -90,7 +90,7 @@ static void handle_death_notification(mach_client_t *client, mach_msg_header_t *
     }
 }
 
-static void client_message_handler(
+static bool client_message_handler(
     mach_port_t service_port,
     mach_msg_header_t *header,
     internal_payload_t *payload,
@@ -105,7 +105,7 @@ static void client_message_handler(
         if (header->msgh_id == MACH_NOTIFY_DEAD_NAME) {
             handle_death_notification(client, header);
         }
-        return;
+        return true;
     }
     
     // Handle our protocol messages
@@ -114,6 +114,8 @@ static void client_message_handler(
     } else if (IS_EXTERNAL_MSG(header->msgh_id)) {
         handle_user_message(client, header, payload, payload_size);
     }
+
+    return true;
 }
 
 /* ============================================================================

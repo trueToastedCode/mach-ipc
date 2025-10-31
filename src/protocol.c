@@ -370,7 +370,10 @@ void protocol_receive_loop(
             // Fall through to deallocate unmatched ack
         } else {
             // Regular message - pass to handler
-            handler(service_port, header, payload, payload_size, context);
+            if (!handler(service_port, header, payload, payload_size, context)) {
+                // handler signaled it will handle the payload cleanup
+                continue;
+            }
         }
         
         // Cleanup OOL memory

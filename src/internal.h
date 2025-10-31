@@ -263,7 +263,7 @@ kern_return_t protocol_send_ack(
 );
 
 /* Receive and dispatch messages (blocking with timeout) */
-typedef void (*message_handler_t)(
+typedef bool (*message_handler_t)(
     mach_port_t service_port,
     mach_msg_header_t *header,
     internal_payload_t *payload,
