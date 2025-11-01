@@ -29,6 +29,16 @@ void on_client_disconnected(mach_server_t *server, client_handle_t client, void 
     printf("Client %u disconnected\n", client.id);
 }
 
+void on_message(mach_server_t *server, client_handle_t client, 
+                uint32_t msg_type, const void *data, size_t size, void *user_data) {
+    (void)server;
+    (void)client;
+    (void)user_data;
+    if (msg_type == MSG_SILENT) {
+        printf("Client: %.*s\n", (int)size, (char*)data);
+    }
+}
+
 void* on_message_with_reply(mach_server_t *server, client_handle_t client,
                             uint32_t msg_type, const void *data, size_t size,
                             size_t *reply_size, void *user_data) {
@@ -63,7 +73,7 @@ int main() {
     server_callbacks_t callbacks = {
         .on_client_connected = on_client_connected,
         .on_client_disconnected = on_client_disconnected,
-        .on_message = NULL,
+        .on_message = on_message,
         .on_message_with_reply = on_message_with_reply
     };
     

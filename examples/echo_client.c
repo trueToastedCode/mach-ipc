@@ -61,25 +61,37 @@ int main() {
         return 1;
     }
     
-    const char *message = "Hello World!";
-    const void *reply = NULL;
-    size_t reply_size = 0;
-    printf("Sending: %s\n", message);
+    const char *echo_message = "Hello World!";
+    const void *echo_reply = NULL;
+    size_t echo_reply_size = 0;
+    printf("Sending: %s\n", echo_message);
     status = mach_client_send_with_reply(
         client, MSG_ECHO,
-        message, strlen(message) + 1,
-        &reply, &reply_size,
+        echo_message, strlen(echo_message) + 1,
+        &echo_reply, &echo_reply_size,
         2000
     );
-    if (status == IPC_SUCCESS && reply) {
-        printf("Echo reply: %s\n", (char*)reply);
+    if (status == IPC_SUCCESS && echo_reply) {
+        printf("Echo reply: %s\n", (char*)echo_reply);
     } else {
         printf("Echo failed: %s\n", ipc_status_string(status));
     }
-    ply_free((void*)reply, reply_size);
+    ply_free((void*)echo_reply, echo_reply_size);
 
     sleep(1);
     
+    const char *silent_message = "Hello from client!";
+    printf("Sending: %s\n", silent_message);
+    status = mach_client_send(
+        client, MSG_SILENT,
+        silent_message, strlen(silent_message) + 1
+    );
+    if (status != IPC_SUCCESS) {
+        printf("Silent msg failed: %s\n", ipc_status_string(status));
+    }
+
+    sleep(1);
+
     mach_client_disconnect(client);
     mach_client_destroy(client);
     
