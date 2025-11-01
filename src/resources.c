@@ -33,12 +33,29 @@ struct resource_tracker {
 static void cleanup_port(void *res) {
     mach_port_t *port = (mach_port_t*)res;
     if (*port != MACH_PORT_NULL) {
-        kern_return_t kr = mach_port_deallocate(mach_task_self(), *port);
-        if (kr != KERN_SUCCESS) {
-            LOG_ERROR_MSG("Port deallocation failed: %s", mach_error_string(kr));
+        // Check what rights we have on this port
+        mach_port_type_t type;
+        kern_return_t kr = mach_port_type(mach_task_self(), *port, &type);
+        
+        if (kr == KERN_SUCCESS && (type & MACH_PORT_TYPE_RECEIVE)) {
+            // We have receive right - use mach_port_destruct
+            mach_port_delta_t srd = 0; // sync value (not used for ports without guard)
+            kr = mach_port_destruct(mach_task_self(), *port, srd, 0);
+            if (kr != KERN_SUCCESS && kr != KERN_INVALID_RIGHT) {
+                LOG_ERROR_MSG("Port destruct failed: %s", mach_error_string(kr));
+            } else if (kr == KERN_SUCCESS) {
+                LOG_DEBUG_MSG("Destructed port %u", *port);
+            }
         } else {
-            LOG_DEBUG_MSG("Deallocated port %u", *port);
+            // Only have send right (or already cleaned up) - deallocate
+            kr = mach_port_deallocate(mach_task_self(), *port);
+            if (kr != KERN_SUCCESS && kr != KERN_INVALID_RIGHT) {
+                LOG_ERROR_MSG("Port deallocation failed: %s", mach_error_string(kr));
+            } else if (kr == KERN_SUCCESS) {
+                LOG_DEBUG_MSG("Deallocated port %u", *port);
+            }
         }
+        // KERN_INVALID_RIGHT means already cleaned up - this is fine during shutdown
         *port = MACH_PORT_NULL;
     }
 }
