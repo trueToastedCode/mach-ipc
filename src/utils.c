@@ -32,11 +32,19 @@ const char* ipc_status_string(ipc_status_t status) {
 }
 
 void* ipc_alloc(size_t size) {
-    return malloc(size);
+    return size ? malloc(size) : NULL;
 }
 
 void ipc_free(void *ptr) {
-    free(ptr);
+    if (ptr) {
+        free(ptr);
+    }
+}
+
+void ply_free(void *ptr, size_t size) {
+    if (ptr && size) {
+        vm_deallocate(mach_task_self(), (vm_address_t)ptr, size);
+    }
 }
 
 ipc_status_t mach_server_broadcast(

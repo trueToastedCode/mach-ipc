@@ -76,7 +76,7 @@ kern_return_t protocol_send_message(
     msg.payload.deallocate = false;
     msg.payload.type = MACH_MSG_OOL_DESCRIPTOR;
 
-    msg.user_payload.address = user_payload;
+    msg.user_payload.address = (void*)user_payload;
     msg.user_payload.size = user_payload_size;
     msg.user_payload.copy = MACH_MSG_VIRTUAL_COPY;
     msg.user_payload.deallocate = false;
@@ -311,7 +311,6 @@ static bool handle_ack_message(
     
     // Find matching waiter
     ack_waiter_t *waiter = NULL;
-    int slot = -1;
     
     for (int i = 0; i < ack_pool->capacity; i++) {
         if (!pool_is_active(ack_pool, i)) continue;
@@ -319,7 +318,6 @@ static bool handle_ack_message(
         ack_waiter_t *w = (ack_waiter_t*)pool_get(ack_pool, i);
         if (w && w->correlation_id == payload->correlation_id) {
             waiter = w;
-            slot = i;
             break;
         }
     }

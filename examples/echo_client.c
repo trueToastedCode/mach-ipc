@@ -10,6 +10,7 @@
 static volatile int running = 1;
 
 void signal_handler(int sig) {
+    (void)sig;
     printf("\nDisconnecting...\n");
     running = 0;
 }
@@ -29,6 +30,8 @@ void on_disconnected(mach_client_t *client, void *data) {
 
 void on_message(mach_client_t *client, uint32_t msg_type,
                 const void *data, size_t size, void *user_data) {
+    (void)client;
+    (void)user_data;
     if (msg_type == MSG_SILENT) {
         printf("Server: %.*s\n", (int)size, (char*)data);
     }
@@ -59,7 +62,7 @@ int main() {
     }
     
     const char *message = "Hello World!";
-    void *reply = NULL;
+    const void *reply = NULL;
     size_t reply_size = 0;
     printf("Sending: %s\n", message);
     status = mach_client_send_with_reply(
@@ -70,10 +73,10 @@ int main() {
     );
     if (status == IPC_SUCCESS && reply) {
         printf("Echo reply: %s\n", (char*)reply);
-        ipc_free(reply);
     } else {
         printf("Echo failed: %s\n", ipc_status_string(status));
     }
+    ply_free((void*)reply, reply_size);
 
     sleep(1);
     

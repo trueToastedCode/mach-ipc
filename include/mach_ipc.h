@@ -88,7 +88,7 @@ ipc_status_t mach_server_send(mach_server_t *server, client_handle_t client,
 /* Send a message to a client and wait for reply (blocking with timeout) */
 ipc_status_t mach_server_send_with_reply(mach_server_t *server, client_handle_t client,
                                          uint32_t msg_type, const void *data, size_t size,
-                                         void **reply_data, size_t *reply_size,
+                                         const void **reply_data, size_t *reply_size,
                                          uint32_t timeout_ms);
 
 /* Broadcast to all connected clients */
@@ -143,7 +143,7 @@ ipc_status_t mach_client_send(mach_client_t *client, uint32_t msg_type,
 /* Send a message and wait for reply (blocking with timeout) */
 ipc_status_t mach_client_send_with_reply(mach_client_t *client, uint32_t msg_type,
                                          const void *data, size_t size,
-                                         void **reply_data, size_t *reply_size,
+                                         const void **reply_data, size_t *reply_size,
                                          uint32_t timeout_ms);
 
 /* Disconnect from server */
@@ -159,10 +159,13 @@ void mach_client_destroy(mach_client_t *client);
 /* Get human-readable error string */
 const char* ipc_status_string(ipc_status_t status);
 
-/* Allocate memory for reply data (use in callbacks) */
+// /* Allocate memory for reply data (use in callbacks) */
 void* ipc_alloc(size_t size);
 
 /* Free memory allocated by framework */
 void ipc_free(void *ptr);
+
+/* Free payload data */
+void ply_free(void *ptr, size_t size);
 
 #endif /* MACH_IPC_H */

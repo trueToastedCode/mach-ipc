@@ -10,6 +10,7 @@
 static mach_server_t *g_server = NULL;
 
 void signal_handler(int sig) {
+    (void)sig;
     printf("\nShutting down...\n");
     if (g_server) {
         mach_server_stop(g_server);

@@ -65,9 +65,7 @@ static void handle_user_message(
                     reply_size
                 );
                 
-                if (reply_data) {
-                    ipc_free(reply_data);
-                }
+                ipc_free(reply_data);
             }
         } else {
             // Fire-and-forget message
@@ -385,7 +383,7 @@ ipc_status_t mach_client_send_with_reply(
     uint32_t msg_type,
     const void *data,
     size_t size,
-    void **reply_data,
+    const void **reply_data,
     size_t *reply_size,
     uint32_t timeout_ms
 ) {
@@ -428,8 +426,7 @@ ipc_status_t mach_client_send_with_reply(
     if (ack_user_payload && ack_user_size) {
         if (kr == KERN_SUCCESS) {
             *reply_size = ack_user_size;
-            *reply_data = ipc_alloc(ack_user_size);
-            memcpy(*reply_data, ack_user_payload, ack_user_size);
+            *reply_data = ack_user_payload;
             return IPC_SUCCESS;
         } else {
             *reply_data = NULL;
