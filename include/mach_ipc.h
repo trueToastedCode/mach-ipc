@@ -160,6 +160,8 @@ void mach_client_destroy(mach_client_t *client);
 /* Get human-readable error string */
 const char* ipc_status_string(ipc_status_t status);
 
+void set_user_ipc_status_string(const char *(*_user_ipc_status_string)(ipc_status_t));
+
 // /* Allocate memory for reply data (use in callbacks) */
 void* ipc_alloc(size_t size);
 

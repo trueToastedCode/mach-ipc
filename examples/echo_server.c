@@ -1,11 +1,8 @@
-#include "mach_ipc.h"
+#include "echo.h"
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
-
-#define MSG_ECHO (1)
-#define MSG_SILENT (2)
 
 static mach_server_t *g_server = NULL;
 
@@ -52,6 +49,7 @@ void* on_message_with_reply(mach_server_t *server, client_handle_t client,
         reply = ipc_alloc(size);
         memcpy(reply, data, size);
         *reply_size = size;
+        *reply_status = ECHO_CUSTOM_STATUS;
 
         // also trigger send a silent msg
         const char *silent_message = "Hello from server!";
@@ -71,6 +69,8 @@ int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
+    set_user_ipc_status_string(echo_status_string);
+
     server_callbacks_t callbacks = {
         .on_client_connected = on_client_connected,
         .on_client_disconnected = on_client_disconnected,

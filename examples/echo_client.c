@@ -1,11 +1,8 @@
-#include "mach_ipc.h"
+#include "echo.h"
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
-
-#define MSG_ECHO (1)
-#define MSG_SILENT (2)
 
 static volatile int running = 1;
 
@@ -41,6 +38,8 @@ int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
     
+    set_user_ipc_status_string(echo_status_string);
+
     client_callbacks_t callbacks = {
         .on_connected = on_connected,
         .on_disconnected = on_disconnected,
@@ -71,7 +70,8 @@ int main() {
         &echo_reply, &echo_reply_size,
         2000
     );
-    if (status == IPC_SUCCESS && echo_reply) {
+    printf("Silent msg status: %s\n", ipc_status_string(status));
+    if (status == ECHO_CUSTOM_STATUS && echo_reply) {
         printf("Echo reply: %s\n", (char*)echo_reply);
     } else {
         printf("Echo failed: %s\n", ipc_status_string(status));

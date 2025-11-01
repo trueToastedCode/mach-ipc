@@ -129,13 +129,13 @@ $(DYNAMIC_LIB): $(FRAMEWORK_OBJS) | $(LIB_DIR)
 # Examples
 # ============================================================================
 
-$(BUILD_DIR)/echo_server: $(EXAMPLE_DIR)/echo_server.c $(STATIC_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/echo_server: $(EXAMPLE_DIR)/echo_server.c $(EXAMPLE_DIR)/echo.c $(STATIC_LIB) | $(BUILD_DIR)
 	@echo "CC $@"
-	@$(CC) $(CFLAGS) $< -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) $^ -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/echo_client: $(EXAMPLE_DIR)/echo_client.c $(STATIC_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/echo_client: $(EXAMPLE_DIR)/echo_client.c $(EXAMPLE_DIR)/echo.c $(STATIC_LIB) | $(BUILD_DIR)
 	@echo "CC $@"
-	@$(CC) $(CFLAGS) $< -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) $^ -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
 
 # ============================================================================
 # Tests

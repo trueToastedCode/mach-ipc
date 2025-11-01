@@ -8,7 +8,16 @@
 #include <string.h>
 #include <pthread.h>
 
+const char *(*user_ipc_status_string)(ipc_status_t) = NULL;
+
 const char* ipc_status_string(ipc_status_t status) {
+    if (status >= 1000) {
+        const char *st_str = NULL;
+        if (user_ipc_status_string) {
+            st_str = user_ipc_status_string(status);
+        }
+        return st_str ? st_str : "Unknown user error";
+    }
     switch (status) {
         case IPC_SUCCESS:
             return "Success";
@@ -29,6 +38,10 @@ const char* ipc_status_string(ipc_status_t status) {
         default:
             return "Unknown error";
     }
+}
+
+void set_user_ipc_status_string(const char *(*_user_ipc_status_string)(ipc_status_t)) {
+    user_ipc_status_string = _user_ipc_status_string;
 }
 
 void* ipc_alloc(size_t size) {
