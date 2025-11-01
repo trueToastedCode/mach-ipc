@@ -12,28 +12,28 @@
  * PAYLOAD MANAGEMENT
  * ============================================================================ */
 
-internal_payload_t* create_payload(size_t data_size) {
-    size_t total_size = sizeof(internal_payload_t) + data_size;
-    internal_payload_t *payload = calloc(1, total_size);
-    if (!payload) {
-        LOG_ERROR_MSG("Failed to allocate payload of size %zu", total_size);
-        return NULL;
-    }
-    payload->data_size = data_size;
-    return payload;
-}
+// internal_payload_t* create_payload(size_t data_size) {
+//     size_t total_size = sizeof(internal_payload_t) + data_size;
+//     internal_payload_t *payload = calloc(1, total_size);
+//     if (!payload) {
+//         LOG_ERROR_MSG("Failed to allocate payload of size %zu", total_size);
+//         return NULL;
+//     }
+//     payload->data_size = data_size;
+//     return payload;
+// }
 
-void free_payload(internal_payload_t *payload) {
-    if (payload) {
-        free(payload);
-    }
-}
+// void free_payload(internal_payload_t *payload) {
+//     if (payload) {
+//         free(payload);
+//     }
+// }
 
-void copy_to_payload(internal_payload_t *payload, const void *data, size_t size) {
-    if (payload && data && size > 0 && size <= payload->data_size) {
-        memcpy(payload->data, data, size);
-    }
-}
+// void copy_to_payload(internal_payload_t *payload, const void *data, size_t size) {
+//     if (payload && data && size > 0 && size <= payload->data_size) {
+//         memcpy(payload->data, data, size);
+//     }
+// }
 
 /* ============================================================================
  * LOW-LEVEL MESSAGE SENDING
@@ -44,7 +44,9 @@ kern_return_t protocol_send_message(
     mach_port_t reply_port,
     mach_msg_id_t msg_id,
     internal_payload_t *payload,
-    size_t payload_size
+    size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size
 ) {
     if (!payload || payload_size < sizeof(internal_payload_t)) {
         LOG_ERROR_MSG("Invalid payload");
@@ -66,12 +68,19 @@ kern_return_t protocol_send_message(
     msg.header.msgh_id = msg_id;
     
     // Set up body and OOL descriptor
-    msg.body.msgh_descriptor_count = 1;
+    msg.body.msgh_descriptor_count = 2;
+
     msg.payload.address = payload;
     msg.payload.size = payload_size;
     msg.payload.copy = MACH_MSG_VIRTUAL_COPY;
     msg.payload.deallocate = false;
     msg.payload.type = MACH_MSG_OOL_DESCRIPTOR;
+
+    msg.user_payload.address = user_payload;
+    msg.user_payload.size = user_payload_size;
+    msg.user_payload.copy = MACH_MSG_VIRTUAL_COPY;
+    msg.user_payload.deallocate = false;
+    msg.user_payload.type = MACH_MSG_OOL_DESCRIPTOR;
     
     LOG_DEBUG_MSG("Sending message: id=0x%x, size=%zu", msg_id, payload_size);
     
@@ -139,6 +148,8 @@ static bool register_ack_waiter(
         .event = evt,
         .reply_payload = NULL,
         .reply_size = 0,
+        .reply_user_payload = NULL,
+        .reply_user_size = 0,
         .received = false,
         .cancelled = false
     };
@@ -158,8 +169,12 @@ kern_return_t protocol_send_with_ack(
     mach_msg_id_t msg_id,
     internal_payload_t *payload,
     size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size,
     internal_payload_t **ack_payload,
     size_t *ack_size,
+    const void **ack_user_payload,
+    size_t *ack_user_size,
     uint32_t timeout_ms
 ) {
     // Assign correlation ID
@@ -178,7 +193,8 @@ kern_return_t protocol_send_with_ack(
     // Send message with WACK feature
     mach_msg_id_t ack_msg_id = SET_FEATURE(msg_id, INTERNAL_FEATURE_WACK);
     kern_return_t kr = protocol_send_message(dest_port, reply_port, 
-                                             ack_msg_id, payload, payload_size);
+                                             ack_msg_id, payload, payload_size,
+                                             user_payload, user_payload_size);
     
     if (kr != KERN_SUCCESS) {
         // Cleanup waiter
@@ -207,6 +223,8 @@ kern_return_t protocol_send_with_ack(
         LOG_INFO_MSG("Ack received (correlation_id=%llu)", correlation_id);
         *ack_payload = waiter->reply_payload;
         *ack_size = waiter->reply_size;
+        *ack_user_payload = waiter->reply_user_payload;
+        *ack_user_size = waiter->reply_user_size;
         result = KERN_SUCCESS;
     } else {
         // Timeout or cancelled
@@ -220,12 +238,19 @@ kern_return_t protocol_send_with_ack(
             LOG_WARN_MSG("Ack arrived during timeout handling, cleaning up (correlation_id=%llu)", 
                         correlation_id);
             vm_deallocate(mach_task_self(), 
-                         (vm_address_t)waiter->reply_payload, 
-                         waiter->reply_size);
+                          (vm_address_t)waiter->reply_payload, 
+                          waiter->reply_size);
+            if (waiter->reply_user_payload && waiter->reply_user_size) {
+                vm_deallocate(mach_task_self(), 
+                              (vm_address_t)waiter->reply_user_payload, 
+                              waiter->reply_user_size);
+            }
         }
         
         *ack_payload = NULL;
         *ack_size = 0;
+        *ack_user_payload = NULL;
+        *ack_user_size = 0;
         result = KERN_OPERATION_TIMED_OUT;
     }
     
@@ -244,7 +269,9 @@ kern_return_t protocol_send_ack(
     mach_msg_id_t original_msg_id,
     uint64_t correlation_id,
     internal_payload_t *ack_payload,
-    size_t ack_payload_size
+    size_t ack_payload_size,
+    const void *ack_user_payload,
+    size_t ack_user_payload_size
 ) {
     if (correlation_id == 0) {
         LOG_ERROR_MSG("Cannot send ack with correlation_id=0");
@@ -259,7 +286,8 @@ kern_return_t protocol_send_ack(
     ack_msg_id = SET_FEATURE(ack_msg_id, INTERNAL_FEATURE_IACK);
     
     return protocol_send_message(dest_port, MACH_PORT_NULL, 
-                                 ack_msg_id, ack_payload, ack_payload_size);
+                                 ack_msg_id, ack_payload, ack_payload_size,
+                                 ack_user_payload, ack_user_payload_size);
 }
 
 /* ============================================================================
@@ -270,7 +298,9 @@ static bool handle_ack_message(
     Pool *ack_pool,
     pthread_mutex_t *ack_lock,
     internal_payload_t *payload,
-    size_t payload_size
+    size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size
 ) {
     if (payload->correlation_id == 0) {
         LOG_ERROR_MSG("Received ack with correlation_id=0");
@@ -313,6 +343,8 @@ static bool handle_ack_message(
     // Store reply - waiter is still valid
     waiter->reply_payload = payload;
     waiter->reply_size = payload_size;
+    waiter->reply_user_payload = user_payload;
+    waiter->reply_user_size = user_payload_size;
     waiter->received = true;
     
     // Signal waiter thread
@@ -365,12 +397,12 @@ void protocol_receive_loop(
         // Check if it's our protocol message
         if (!IS_THIS_PROTOCOL_MSG(header->msgh_id)) {
             // Pass to handler (might be death notification, etc.)
-            handler(service_port, header, NULL, 0, context);
+            handler(service_port, header, NULL, 0, NULL, 0, context);
             continue;
         }
         
         // Validate message structure
-        if (intrl_mach_msg->body.msgh_descriptor_count < 1) {
+        if (intrl_mach_msg->body.msgh_descriptor_count < 2) {
             LOG_ERROR_MSG("Invalid descriptor count");
             continue;
         }
@@ -383,18 +415,20 @@ void protocol_receive_loop(
         // Extract payload
         internal_payload_t *payload = (internal_payload_t*)intrl_mach_msg->payload.address;
         size_t payload_size = intrl_mach_msg->payload.size;
+        const void *user_payload = (internal_payload_t*)intrl_mach_msg->user_payload.address;
+        size_t user_payload_size = intrl_mach_msg->user_payload.size;
         
         if (!payload || payload_size < sizeof(internal_payload_t)) {
             LOG_ERROR_MSG("Invalid payload data");
             continue;
         }
         
-        LOG_DEBUG_MSG("Received message: id=0x%x, size=%zu, correlation=%llu",
-                     header->msgh_id, payload_size, payload->correlation_id);
+        LOG_DEBUG_MSG("Received message: id=0x%x, size=%zu, user_size=%zu, correlation=%llu",
+                      header->msgh_id, payload_size, user_payload_size, payload->correlation_id);
         
         // Handle acknowledgments
         if (HAS_FEATURE_IACK(header->msgh_id)) {
-            if (handle_ack_message(ack_pool, ack_lock, payload, payload_size)) {
+            if (handle_ack_message(ack_pool, ack_lock, payload, payload_size, user_payload, user_payload_size)) {
                 // Ack was matched and accepted, don't deallocate
                 // The waiter owns it now
                 continue;
@@ -402,7 +436,7 @@ void protocol_receive_loop(
             // Ack was rejected (timeout/unknown), fall through to deallocate
         } else {
             // Regular message - pass to handler
-            if (!handler(service_port, header, payload, payload_size, context)) {
+            if (!handler(service_port, header, payload, payload_size, user_payload, user_payload_size, context)) {
                 // handler signaled it will handle the payload cleanup
                 continue;
             }
@@ -410,6 +444,9 @@ void protocol_receive_loop(
         
         // Cleanup OOL memory
         vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+        if (user_payload && user_payload_size) {
+            vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+        }
     }
     
     LOG_INFO_MSG("Receive loop stopped");

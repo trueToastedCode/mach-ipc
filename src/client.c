@@ -17,13 +17,15 @@ static void handle_user_message(
     mach_client_t *client,
     mach_msg_header_t *header,
     internal_payload_t *payload,
-    size_t payload_size
+    size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size
 ) {
     uint32_t user_msg_type = header->msgh_id & INTERNAL_MSG_TYPE_MASK;
     bool needs_reply = HAS_FEATURE_WACK(header->msgh_id);
     
-    LOG_DEBUG_MSG("Received user message: type=%u, needs_reply=%d",
-                 user_msg_type, needs_reply);
+    LOG_DEBUG_MSG("Received user message: type=%u, needs_reply=%d, has_user_payload=%d",
+                 user_msg_type, needs_reply, user_payload != NULL);
     
     // Dispatch to message queue for asynchronous processing
     // Header will be overwritten, can only use copies in async dispatch
@@ -42,31 +44,26 @@ static void handle_user_message(
                 void *reply_data = client->callbacks.on_message_with_reply(
                     client,
                     user_msg_type,
-                    payload->data,
-                    payload->data_size,
+                    user_payload,
+                    user_payload_size,
                     &reply_size,
                     client->user_data
                 );
                 
                 // Send acknowledgment
-                internal_payload_t *ack = create_payload(reply_size);
-                if (ack) {
-                    ack->client_id = client_id;
-                    ack->status = reply_data ? IPC_SUCCESS : IPC_ERROR_INTERNAL;
-                    if (reply_data && reply_size > 0) {
-                        copy_to_payload(ack, reply_data, reply_size);
-                    }
-                    
-                    protocol_send_ack(
-                        server_port,
-                        msgh_id,
-                        correlation_id,
-                        ack,
-                        sizeof(internal_payload_t) + reply_size
-                    );
-                    
-                    free_payload(ack);
-                }
+                internal_payload_t ack = (internal_payload_t){
+                    .client_id = client_id,
+                    .status = reply_data ? IPC_SUCCESS : IPC_ERROR_INTERNAL
+                };
+                protocol_send_ack(
+                    server_port,
+                    msgh_id,
+                    correlation_id,
+                    &ack,
+                    sizeof(ack),
+                    reply_data,
+                    reply_size
+                );
                 
                 if (reply_data) {
                     ipc_free(reply_data);
@@ -78,8 +75,8 @@ static void handle_user_message(
                 client->callbacks.on_message(
                     client,
                     user_msg_type,
-                    payload->data,
-                    payload->data_size,
+                    user_payload,
+                    user_payload_size,
                     client->user_data
                 );
             }
@@ -87,6 +84,9 @@ static void handle_user_message(
         
         // Cleanup payload after processing
         vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+        if (user_payload && user_payload_size) {
+            vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+        }
     });
 }
 
@@ -109,6 +109,8 @@ static bool client_message_handler(
     mach_msg_header_t *header,
     internal_payload_t *payload,
     size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size,
     void *context
 ) {
     (void)service_port;
@@ -126,7 +128,7 @@ static bool client_message_handler(
     if (IS_INTERNAL_MSG(header->msgh_id)) {
         
     } else if (IS_EXTERNAL_MSG(header->msgh_id)) {
-        handle_user_message(client, header, payload, payload_size);
+        handle_user_message(client, header, payload, payload_size, user_payload, user_payload_size);
         return false;  // Payload cleanup handled by async dispatch
     }
 
@@ -287,16 +289,15 @@ ipc_status_t mach_client_connect(
                         NULL, "receiver_thread");
     
     // Send connect message
-    internal_payload_t *payload = create_payload(0);
-    if (!payload) {
-        return IPC_ERROR_NO_MEMORY;
-    }
-    
-    payload->client_id = 0; // Will be assigned by server
-    payload->status = IPC_SUCCESS;
+    internal_payload_t payload = (internal_payload_t){
+        .client_id = 0, // Will be assigned by server
+        .status = IPC_SUCCESS
+    };
     
     internal_payload_t *ack_payload = NULL;
     size_t ack_size = 0;
+    const void *ack_user_payload = NULL;
+    size_t ack_user_size = 0;
     
     kr = protocol_send_with_ack(
         client->server_port,
@@ -305,14 +306,16 @@ ipc_status_t mach_client_connect(
         &client->ack_lock,
         &client->next_correlation_id,
         MSG_ID_CONNECT,
-        payload,
-        sizeof(internal_payload_t),
+        &payload,
+        sizeof(payload),
+        NULL,
+        0,
         &ack_payload,
         &ack_size,
+        &ack_user_payload,
+        &ack_user_size,
         timeout_ms
     );
-    
-    free_payload(payload);
     
     if (kr != KERN_SUCCESS) {
         LOG_ERROR_MSG("Connect failed: %s", mach_error_string(kr));
@@ -359,24 +362,20 @@ ipc_status_t mach_client_send(
         return IPC_ERROR_NOT_CONNECTED;
     }
     
-    internal_payload_t *payload = create_payload(size);
-    if (!payload) return IPC_ERROR_NO_MEMORY;
-    
-    payload->client_id = client->client_id;
-    payload->status = IPC_SUCCESS;
-    if (data && size > 0) {
-        copy_to_payload(payload, data, size);
-    }
+    internal_payload_t payload = (internal_payload_t){
+        .client_id = client->client_id,
+        .status = IPC_SUCCESS
+    };
     
     kern_return_t kr = protocol_send_message(
         client->server_port,
         MACH_PORT_NULL,
         MSG_ID_USER(msg_type),
-        payload,
-        sizeof(internal_payload_t) + size
+        &payload,
+        sizeof(payload),
+        data,
+        size
     );
-    
-    free_payload(payload);
     
     return kr == KERN_SUCCESS ? IPC_SUCCESS : IPC_ERROR_SEND_FAILED;
 }
@@ -394,17 +393,15 @@ ipc_status_t mach_client_send_with_reply(
         return IPC_ERROR_INVALID_PARAM;
     }
     
-    internal_payload_t *payload = create_payload(size);
-    if (!payload) return IPC_ERROR_NO_MEMORY;
-    
-    payload->client_id = client->client_id;
-    payload->status = IPC_SUCCESS;
-    if (data && size > 0) {
-        copy_to_payload(payload, data, size);
-    }
+    internal_payload_t payload = (internal_payload_t){
+        .client_id = client->client_id,
+        .status = IPC_SUCCESS
+    };
     
     internal_payload_t *ack_payload = NULL;
     size_t ack_size = 0;
+    const void *ack_user_payload = NULL;
+    size_t ack_user_size = 0;
     
     kern_return_t kr = protocol_send_with_ack(
         client->server_port,
@@ -413,29 +410,37 @@ ipc_status_t mach_client_send_with_reply(
         &client->ack_lock,
         &client->next_correlation_id,
         MSG_ID_USER(msg_type),
-        payload,
-        sizeof(internal_payload_t) + size,
+        &payload,
+        sizeof(payload),
+        data,
+        size,
         &ack_payload,
         &ack_size,
+        &ack_user_payload,
+        &ack_user_size,
         timeout_ms
     );
-    
-    free_payload(payload);
-    
-    if (kr == KERN_SUCCESS && ack_payload) {
-        *reply_size = ack_payload->data_size;
-        if (*reply_size > 0) {
-            *reply_data = ipc_alloc(*reply_size);
-            memcpy(*reply_data, ack_payload->data, *reply_size);
+
+    if (ack_payload && ack_size) {
+        vm_deallocate(mach_task_self(), (vm_address_t)ack_payload, ack_size);
+    }
+
+    if (ack_user_payload && ack_user_size) {
+        if (kr == KERN_SUCCESS) {
+            *reply_size = ack_user_size;
+            *reply_data = ipc_alloc(ack_user_size);
+            memcpy(*reply_data, ack_user_payload, ack_user_size);
+            return IPC_SUCCESS;
         } else {
             *reply_data = NULL;
+            *reply_size = 0;
         }
-        vm_deallocate(mach_task_self(), (vm_address_t)ack_payload, ack_size);
-        return IPC_SUCCESS;
+        vm_deallocate(mach_task_self(), (vm_address_t)ack_user_payload, ack_user_size);
+    } else {
+        *reply_data = NULL;
+        *reply_size = 0;
     }
     
-    *reply_data = NULL;
-    *reply_size = 0;
     return kr == KERN_OPERATION_TIMED_OUT ? IPC_ERROR_TIMEOUT : IPC_ERROR_SEND_FAILED;
 }
 

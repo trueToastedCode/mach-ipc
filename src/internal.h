@@ -92,6 +92,7 @@ typedef struct {
     mach_msg_header_t header;
     mach_msg_body_t body;
     mach_msg_ool_descriptor_t payload;
+    mach_msg_ool_descriptor_t user_payload;
 } internal_mach_msg_t;
 
 /* Payload structure sent in OOL descriptor */
@@ -99,8 +100,6 @@ typedef struct {
     uint32_t client_id;         // Client identifier
     uint64_t correlation_id;    // For ack matching (0 = no ack needed)
     int32_t status;             // Status code (0 = success)
-    uint32_t data_size;         // Size of data[] array
-    uint8_t data[];             // User payload
 } internal_payload_t;
 
 #define INTERNAL_RCV_BUFFER_SIZE (sizeof(internal_mach_msg_t) + 1024)
@@ -137,6 +136,8 @@ typedef struct {
     event_t *event;
     internal_payload_t *reply_payload;
     size_t reply_size;
+    const void *reply_user_payload;
+    size_t reply_user_size;
     bool received;
     bool cancelled;  // Prevents use-after-free on timeout race
 } ack_waiter_t;
@@ -237,7 +238,9 @@ kern_return_t protocol_send_message(
     mach_port_t reply_port,
     mach_msg_id_t msg_id,
     internal_payload_t *payload,
-    size_t payload_size
+    size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size
 );
 
 /* Send a message and wait for ack */
@@ -250,8 +253,12 @@ kern_return_t protocol_send_with_ack(
     mach_msg_id_t msg_id,
     internal_payload_t *payload,
     size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size,
     internal_payload_t **ack_payload,
     size_t *ack_size,
+    const void **ack_user_payload,
+    size_t *ack_user_size,
     uint32_t timeout_ms
 );
 
@@ -261,7 +268,9 @@ kern_return_t protocol_send_ack(
     mach_msg_id_t original_msg_id,
     uint64_t correlation_id,
     internal_payload_t *ack_payload,
-    size_t ack_payload_size
+    size_t ack_payload_size,
+    const void *ack_user_payload,
+    size_t ack_user_payload_size
 );
 
 /* Receive and dispatch messages (blocking with timeout) */
@@ -270,6 +279,8 @@ typedef bool (*message_handler_t)(
     mach_msg_header_t *header,
     internal_payload_t *payload,
     size_t payload_size,
+    const void *user_payload,
+    size_t user_payload_size,
     void *context
 );
 
@@ -286,14 +297,14 @@ void protocol_receive_loop(
  * HELPER FUNCTIONS
  * ============================================================================ */
 
-/* Create a payload buffer */
-internal_payload_t* create_payload(size_t data_size);
+// /* Create a payload buffer */
+// internal_payload_t* create_payload(size_t data_size);
 
-/* Free a payload */
-void free_payload(internal_payload_t *payload);
+// /* Free a payload */
+// void free_payload(internal_payload_t *payload);
 
-/* Copy user data into payload */
-void copy_to_payload(internal_payload_t *payload, const void *data, size_t size);
+// /* Copy user data into payload */
+// void copy_to_payload(internal_payload_t *payload, const void *data, size_t size);
 
 /* Find client by ID (server-side, must hold clients_lock) */
 client_info_t* find_client_by_id_locked(mach_server_t *server, uint32_t client_id);
