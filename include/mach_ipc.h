@@ -43,7 +43,8 @@ typedef enum {
     IPC_ERROR_TIMEOUT = -4,
     IPC_ERROR_SEND_FAILED = -5,
     IPC_ERROR_INTERNAL = -6,
-    IPC_ERROR_CLIENT_FULL = -7
+    IPC_ERROR_CLIENT_FULL = -7,
+    IPC_USER_BASE = 1000 // 1000+ space ment for custom user status codes
 } ipc_status_t;
 
 /* ============================================================================
@@ -67,7 +68,7 @@ typedef struct {
      * Return NULL to indicate error. */
     void* (*on_message_with_reply)(mach_server_t *server, client_handle_t client,
                                    uint32_t msg_type, const void *data, size_t size,
-                                   size_t *reply_size, void *user_data);
+                                   size_t *reply_size, void *user_data, int *reply_status);
 } server_callbacks_t;
 
 /* Create a server bound to a service name */
@@ -123,7 +124,7 @@ typedef struct {
     /* Called when a message arrives that requires a response */
     void* (*on_message_with_reply)(mach_client_t *client, uint32_t msg_type,
                                    const void *data, size_t size,
-                                   size_t *reply_size, void *user_data);
+                                   size_t *reply_size, void *user_data, int *reply_status);
 } client_callbacks_t;
 
 /* Create a client (doesn't connect yet) */

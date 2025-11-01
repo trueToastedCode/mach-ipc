@@ -41,19 +41,21 @@ static void handle_user_message(
             // Message with reply
             if (client->callbacks.on_message_with_reply) {
                 size_t reply_size = 0;
+                int reply_status = IPC_SUCCESS;
                 void *reply_data = client->callbacks.on_message_with_reply(
                     client,
                     user_msg_type,
                     user_payload,
                     user_payload_size,
                     &reply_size,
-                    client->user_data
+                    client->user_data,
+                    &reply_status
                 );
                 
                 // Send acknowledgment
                 internal_payload_t ack = (internal_payload_t){
                     .client_id = client_id,
-                    .status = reply_data ? IPC_SUCCESS : IPC_ERROR_INTERNAL
+                    .status = reply_status
                 };
                 protocol_send_ack(
                     server_port,
@@ -322,19 +324,22 @@ ipc_status_t mach_client_connect(
     
     if (!ack_payload) {
         LOG_ERROR_MSG("Connect ack missing");
+        ply_free((void*)ack_user_payload, ack_user_size);
         return IPC_ERROR_INTERNAL;
     }
     
     if (ack_payload->status != IPC_SUCCESS) {
         LOG_ERROR_MSG("Connect rejected by server (status=%d)", ack_payload->status);
-        vm_deallocate(mach_task_self(), (vm_address_t)ack_payload, ack_size);
+        ply_free((void*)ack_payload, ack_size);
+        ply_free((void*)ack_user_payload, ack_user_size);
         return ack_payload->status;
     }
     
     client->client_id = ack_payload->client_id;
     client->connected = 1;
     
-    vm_deallocate(mach_task_self(), (vm_address_t)ack_payload, ack_size);
+    ply_free((void*)ack_payload, ack_size);
+    ply_free((void*)ack_user_payload, ack_user_size);
     
     LOG_INFO_MSG("Connected to server (client_id=%u)", client->client_id);
     
@@ -419,15 +424,22 @@ ipc_status_t mach_client_send_with_reply(
         timeout_ms
     );
 
+    int ack_status;
+    bool is_ack_status;
+
     if (ack_payload && ack_size) {
+        ack_status = ack_payload->status;
+        is_ack_status = true;
         vm_deallocate(mach_task_self(), (vm_address_t)ack_payload, ack_size);
+    } else {
+        is_ack_status = false;
     }
 
     if (ack_user_payload && ack_user_size) {
         if (kr == KERN_SUCCESS) {
             *reply_size = ack_user_size;
             *reply_data = ack_user_payload;
-            return IPC_SUCCESS;
+            return is_ack_status ? ack_status : IPC_SUCCESS;
         } else {
             *reply_data = NULL;
             *reply_size = 0;

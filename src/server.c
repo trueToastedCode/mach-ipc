@@ -243,6 +243,7 @@ static void handle_user_message(
             // Message with reply
             if (server->callbacks.on_message_with_reply) {
                 size_t reply_size = 0;
+                int reply_status = IPC_SUCCESS;
                 void *reply_data = server->callbacks.on_message_with_reply(
                     server,
                     (client_handle_t){.id = client_id, .internal = client},
@@ -250,13 +251,14 @@ static void handle_user_message(
                     user_payload,
                     user_payload_size,
                     &reply_size,
-                    server->user_data
+                    server->user_data,
+                    &reply_status
                 );
 
                 // Send acknowledgment
                 internal_payload_t ack = (internal_payload_t){
                     .client_id = client_id,
-                    .status = reply_data ? IPC_SUCCESS : IPC_ERROR_INTERNAL
+                    .status = reply_status
                 };
                 protocol_send_ack(
                     client_port,
@@ -523,15 +525,22 @@ ipc_status_t mach_server_send_with_reply(
         timeout_ms
     );
     
+    int ack_status;
+    bool is_ack_status;
+
     if (ack_payload && ack_size) {
+        ack_status = ack_payload->status;
+        is_ack_status = true;
         vm_deallocate(mach_task_self(), (vm_address_t)ack_payload, ack_size);
+    } else {
+        is_ack_status = false;
     }
 
     if (ack_user_payload && ack_user_size) {
         if (kr == KERN_SUCCESS) {
             *reply_size = ack_user_size;
             *reply_data = ack_user_payload;
-            return IPC_SUCCESS;
+            return is_ack_status ? ack_status : IPC_SUCCESS;
         } else {
             *reply_data = NULL;
             *reply_size = 0;

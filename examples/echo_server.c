@@ -41,8 +41,9 @@ void on_message(mach_server_t *server, client_handle_t client,
 
 void* on_message_with_reply(mach_server_t *server, client_handle_t client,
                             uint32_t msg_type, const void *data, size_t size,
-                            size_t *reply_size, void *user_data) {
+                            size_t *reply_size, void *user_data, int *reply_status) {
     (void)user_data;
+    (void)reply_status;
     void *reply = NULL;
     if (msg_type == MSG_ECHO) {
         printf("Client %u: %.*s\n", client.id, (int)size, (char*)data);
