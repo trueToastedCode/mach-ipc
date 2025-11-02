@@ -148,16 +148,17 @@ static bool register_ack_waiter(
         return false;
     }
     
+    // Initialize atomic fields with atomic_init (must be done before any concurrent access)
     *waiter = (ack_waiter_t){
         .correlation_id = correlation_id,
         .event = evt,
         .reply_payload = NULL,
         .reply_size = 0,
         .reply_user_payload = NULL,
-        .reply_user_size = 0,
-        .received = false,
-        .cancelled = false
+        .reply_user_size = 0
     };
+    atomic_init(&waiter->received, false);
+    atomic_init(&waiter->cancelled, false);
     
     *waiter_out = waiter;
     
@@ -214,43 +215,57 @@ kern_return_t protocol_send_with_ack(
     LOG_DEBUG_MSG("Waiting for ack (correlation_id=%llu, timeout=%ums)", 
                   correlation_id, timeout_ms);
     
-    // Wait for reply (released lock during wait)
+    // Wait for reply (lock is released during wait)
     bool got_reply = event_wait_timeout(waiter->event, timeout_ms);
     
-    // CRITICAL SECTION: Mark as cancelled BEFORE checking if we got reply
-    // This prevents the race where ack arrives after timeout but before cleanup
+    // CRITICAL FIX: Set cancelled atomically BEFORE checking received
+    // This prevents the race where ack arrives between timeout and lock acquisition
+    if (!got_reply) {
+        atomic_store_explicit(&waiter->cancelled, true, memory_order_release);
+    }
+    
+    // Now acquire lock for final state check and cleanup
     pthread_mutex_lock(ack_lock);
     
     kern_return_t result;
     
-    if (got_reply && waiter->received && !waiter->cancelled) {
-        // Success: got reply before timeout
+    // Load received flag atomically
+    bool was_received = atomic_load_explicit(&waiter->received, memory_order_acquire);
+    bool was_cancelled = atomic_load_explicit(&waiter->cancelled, memory_order_acquire);
+    
+    if (got_reply && was_received && !was_cancelled) {
+        // SUCCESS: Got reply before timeout
         LOG_INFO_MSG("Ack received (correlation_id=%llu)", correlation_id);
         *ack_payload = waiter->reply_payload;
         *ack_size = waiter->reply_size;
         *ack_user_payload = waiter->reply_user_payload;
         *ack_user_size = waiter->reply_user_size;
         result = KERN_SUCCESS;
-    } else {
-        // Timeout or cancelled
-        LOG_ERROR_MSG("Ack timeout (correlation_id=%llu)", correlation_id);
+    } else if (was_received && was_cancelled) {
+        // RACE CONDITION: Ack arrived after timeout but before we set cancelled
+        // We need to clean up the payload that the ack handler stored
+        LOG_WARN_MSG("Ack arrived during timeout handling (correlation_id=%llu), cleaning up", 
+                    correlation_id);
         
-        // Mark as cancelled so late arrivals are ignored
-        waiter->cancelled = true;
-        
-        // If reply arrived during our lock acquisition, we need to clean it up
-        if (waiter->received && waiter->reply_payload) {
-            LOG_WARN_MSG("Ack arrived during timeout handling, cleaning up (correlation_id=%llu)", 
-                        correlation_id);
+        if (waiter->reply_payload) {
             vm_deallocate(mach_task_self(), 
                           (vm_address_t)waiter->reply_payload, 
                           waiter->reply_size);
-            if (waiter->reply_user_payload && waiter->reply_user_size) {
-                vm_deallocate(mach_task_self(), 
-                              (vm_address_t)waiter->reply_user_payload, 
-                              waiter->reply_user_size);
-            }
         }
+        if (waiter->reply_user_payload && waiter->reply_user_size) {
+            vm_deallocate(mach_task_self(), 
+                          (vm_address_t)waiter->reply_user_payload, 
+                          waiter->reply_user_size);
+        }
+        
+        *ack_payload = NULL;
+        *ack_size = 0;
+        *ack_user_payload = NULL;
+        *ack_user_size = 0;
+        result = KERN_OPERATION_TIMED_OUT;
+    } else {
+        // TIMEOUT: No ack arrived (or arrived way too late)
+        LOG_ERROR_MSG("Ack timeout (correlation_id=%llu)", correlation_id);
         
         *ack_payload = NULL;
         *ack_size = 0;
@@ -338,8 +353,11 @@ static bool handle_ack_message(
         return false;
     }
     
-    // CRITICAL: Check if waiter was cancelled (timed out)
-    if (waiter->cancelled) {
+    // CRITICAL: Check if waiter was cancelled (timed out) - use atomic load
+    // Memory order acquire ensures we see the timeout thread's cancellation
+    bool was_cancelled = atomic_load_explicit(&waiter->cancelled, memory_order_acquire);
+    
+    if (was_cancelled) {
         pthread_mutex_unlock(ack_lock);
         LOG_WARN_MSG("Ack arrived after timeout (correlation_id=%llu), discarding", 
                      payload->correlation_id);
@@ -347,12 +365,13 @@ static bool handle_ack_message(
         return false;
     }
     
-    // Store reply - waiter is still valid
+    // SUCCESS: Store reply data
+    // Use atomic store with release semantics so timeout thread sees our write
     waiter->reply_payload = payload;
     waiter->reply_size = payload_size;
     waiter->reply_user_payload = user_payload;
     waiter->reply_user_size = user_payload_size;
-    waiter->received = true;
+    atomic_store_explicit(&waiter->received, true, memory_order_release);
     
     // Signal waiter thread
     event_signal(waiter->event);

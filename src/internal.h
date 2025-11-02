@@ -11,6 +11,7 @@
 #include <dispatch/dispatch.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include "mach_ipc.h"
 #include "pool.h"
 #include "event_framework.h"
@@ -71,8 +72,8 @@ typedef struct {
     size_t reply_size;
     const void *reply_user_payload;
     size_t reply_user_size;
-    bool received;
-    bool cancelled;  // Prevents use-after-free on timeout race
+    atomic_bool received;
+    atomic_bool cancelled;  // Prevents use-after-free on timeout race
 } ack_waiter_t;
 
 /* ============================================================================
