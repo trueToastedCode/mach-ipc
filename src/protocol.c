@@ -78,7 +78,12 @@ kern_return_t protocol_send_message(
 
     msg.user_payload.address = (void*)user_payload;
     msg.user_payload.size = user_payload_size;
-    msg.user_payload.copy = MACH_MSG_VIRTUAL_COPY;
+    msg.user_payload.copy = HAS_FEATURE_UPSH(msg_id)
+        // Send memory object handle instead of copying data
+        // Receiver maps it directly into their address space
+        ? (MAP_MEM_VM_SHARE | VM_PROT_READ)
+        // Copy data
+        : (MACH_MSG_VIRTUAL_COPY);
     msg.user_payload.deallocate = false;
     msg.user_payload.type = MACH_MSG_OOL_DESCRIPTOR;
     
@@ -284,6 +289,10 @@ kern_return_t protocol_send_ack(
     mach_msg_id_t ack_msg_id = original_msg_id;
     ack_msg_id = UNSET_FEATURE(ack_msg_id, INTERNAL_FEATURE_WACK);
     ack_msg_id = SET_FEATURE(ack_msg_id, INTERNAL_FEATURE_IACK);
+    // upsh not save right now
+    // user payload in ack is allocated in the ack handle
+    // but after being sent immediately set free
+    ack_msg_id = UNSET_FEATURE(ack_msg_id, INTERNAL_FEATURE_UPSH);
     
     return protocol_send_message(dest_port, MACH_PORT_NULL, 
                                  ack_msg_id, ack_payload, ack_payload_size,

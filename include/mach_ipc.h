@@ -6,6 +6,78 @@
 #include <stddef.h>
 
 /* ============================================================================
+ * MESSAGE ID ENCODING (keep your original design)
+ * 
+ * 32-bit message ID layout:
+ * [31:20] - Magic (0x875) - 12 bits
+ * [19:8]  - Features flags - 12 bits  
+ * [7:0]   - Message type - 8 bits
+ * ============================================================================ */
+
+#define INTERNAL_MSG_MAGIC          (0x875UL << 20)
+#define INTERNAL_MSG_TYPE_MASK      (0xFFUL)
+#define INTERNAL_MSG_FEATURE_MASK   (0xFFFUL << 8)
+
+/* Feature flags - keep your original design */
+#define INTERNAL_FEATURE_ITRN   (1UL << 8)   // For internal usage (seperate internel/external messages types and define same types without collision)
+#define INTERNAL_FEATURE_WACK   (1UL << 9)   // Wait for acknowledgment (will be set/unset automatically)
+#define INTERNAL_FEATURE_IACK   (1UL << 10)  // Is an acknowledgment (will be set/unset automatically)
+#define INTERNAL_FEATURE_UPSH   (1UL << 11)  // User payload share instead of copy
+
+/* Check if message ID belongs to our protocol */
+#define IS_THIS_PROTOCOL_MSG(id) \
+    (((id) & (0xFFFUL << 20)) == INTERNAL_MSG_MAGIC)
+
+/* Check feature flags */
+#define HAS_FEATURE_ITRN(id) \
+    (((id) & INTERNAL_FEATURE_ITRN) != 0)
+
+#define HAS_FEATURE_WACK(id) \
+    (((id) & INTERNAL_FEATURE_WACK) != 0)
+
+#define HAS_FEATURE_IACK(id) \
+    (((id) & INTERNAL_FEATURE_IACK) != 0)
+
+#define HAS_FEATURE_UPSH(id) \
+    (((id) & INTERNAL_FEATURE_UPSH) != 0)
+
+/* Check specific message type (ignoring features except internal/external) */
+#define IS_INTERNAL_MSG_TYPE(id, type) \
+    (((id) & (0xFFF000FFUL | (INTERNAL_FEATURE_ITRN))) == ((INTERNAL_MSG_MAGIC) | (INTERNAL_FEATURE_ITRN) | (type)))
+
+#define IS_EXTERNAL_MSG_TYPE(id, type) \
+    (((id) & (0xFFF000FFUL | (INTERNAL_FEATURE_ITRN))) == ((INTERNAL_MSG_MAGIC) | (type)))
+
+#define IS_INTERNAL_MSG(id) \
+    (((id) & (0xFFF00000UL | (INTERNAL_FEATURE_ITRN))) == ((INTERNAL_MSG_MAGIC) | (INTERNAL_FEATURE_ITRN)))
+
+#define IS_EXTERNAL_MSG(id) \
+    (((id) & (0xFFF00000UL | (INTERNAL_FEATURE_ITRN))) == (INTERNAL_MSG_MAGIC))
+
+/* Set/unset features */
+#define SET_FEATURE(id, feat) ((id) | (feat))
+#define UNSET_FEATURE(id, feat) ((id) & (~(feat)))
+
+/* Internal message types (framework control messages) */
+typedef enum {
+    INTERNAL_MSG_TYPE_CONNECT = 1,
+    // INTERNAL_MSG_TYPE_DISCONNECT = 2,
+    // INTERNAL_MSG_TYPE_DEATH_NOTIFY = 3,
+} internal_msg_type_t;
+
+/* Construct internal message IDs */
+#define INTERNAL_MSG_ID(type) (INTERNAL_MSG_MAGIC | INTERNAL_FEATURE_ITRN | (type))
+
+/* Construct external message IDs */
+#define EXTERNAL_MSG_ID(type) (INTERNAL_MSG_MAGIC | (type))
+
+/* Common message IDs */
+#define MSG_ID_CONNECT      INTERNAL_MSG_ID(INTERNAL_MSG_TYPE_CONNECT)
+
+/* User message ID (pass through user's type, defaults to external unless internal is already set) */
+#define MSG_ID_USER(type)   EXTERNAL_MSG_ID(type)
+
+/* ============================================================================
  * MACH IPC FRAMEWORK - Public API
  * 
  * A simple, clean abstraction over Mach IPC for building client-server

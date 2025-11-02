@@ -31,7 +31,7 @@ void on_message(mach_server_t *server, client_handle_t client,
     (void)server;
     (void)client;
     (void)user_data;
-    if (msg_type == MSG_SILENT) {
+    if (msg_type == MSG_TYPE_SILENT) {
         printf("Client: %.*s\n", (int)size, (char*)data);
     }
 }
@@ -42,7 +42,7 @@ void* on_message_with_reply(mach_server_t *server, client_handle_t client,
     (void)user_data;
     (void)reply_status;
     void *reply = NULL;
-    if (msg_type == MSG_ECHO) {
+    if (msg_type == MSG_TYPE_ECHO) {
         printf("Client %u: %.*s\n", client.id, (int)size, (char*)data);
         
         // Echo back
@@ -55,7 +55,7 @@ void* on_message_with_reply(mach_server_t *server, client_handle_t client,
         const char *silent_message = "Hello from server!";
         printf("Sending: %s\n", silent_message);
         int status = mach_server_send(
-            server, client, MSG_SILENT,
+            server, client, MSG_ID_SILENT,
             silent_message, strlen(silent_message) + 1
         );
         if (status != IPC_SUCCESS) {

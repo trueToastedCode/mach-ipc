@@ -29,7 +29,7 @@ void on_message(mach_client_t *client, uint32_t msg_type,
                 const void *data, size_t size, void *user_data) {
     (void)client;
     (void)user_data;
-    if (msg_type == MSG_SILENT) {
+    if (msg_type == MSG_TYPE_SILENT) {
         printf("Server: %.*s\n", (int)size, (char*)data);
     }
 }
@@ -61,29 +61,42 @@ int main() {
     }
     
     const char *echo_message = "Hello World!";
+    size_t echo_message_len = strlen(echo_message) + 1;
+    void *echo_message_buffer = ipc_alloc(echo_message_len);
+    if (!echo_message_buffer) {
+        fprintf(stderr, "Failed to alloc buffer for echo msg");
+        mach_client_destroy(client);
+        return 1;
+    }
+    memcpy(echo_message_buffer, echo_message, echo_message_len);
     const void *echo_reply = NULL;
     size_t echo_reply_size = 0;
+
     printf("Sending: %s\n", echo_message);
+
     status = mach_client_send_with_reply(
-        client, MSG_ECHO,
-        echo_message, strlen(echo_message) + 1,
+        client, MSG_ID_ECHO,
+        echo_message_buffer, echo_message_len,
         &echo_reply, &echo_reply_size,
         2000
     );
+    
     printf("Silent msg status: %s\n", ipc_status_string(status));
     if (status == ECHO_CUSTOM_STATUS && echo_reply) {
         printf("Echo reply: %s\n", (char*)echo_reply);
     } else {
         printf("Echo failed: %s\n", ipc_status_string(status));
     }
+
+    ipc_free(echo_message_buffer);
     ply_free((void*)echo_reply, echo_reply_size);
 
     sleep(1);
-    
+
     const char *silent_message = "Hello from client!";
     printf("Sending: %s\n", silent_message);
     status = mach_client_send(
-        client, MSG_SILENT,
+        client, MSG_ID_SILENT,
         silent_message, strlen(silent_message) + 1
     );
     if (status != IPC_SUCCESS) {
