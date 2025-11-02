@@ -454,20 +454,50 @@ void protocol_receive_loop(
  * HELPER FUNCTIONS
  * ============================================================================ */
 
-client_info_t* find_client_by_id_locked(mach_server_t *server, uint32_t client_id) {
+client_info_t* find_client_by_id_locked(mach_server_t *server, uint32_t client_id, int *slot) {
+    if (slot && *slot >= 0) {
+        // slot is defined, validate
+        if (*slot < MAX_CLIENTS) {
+            client_info_t *client = server->clients[*slot];
+            if (client && client->id == client_id && client->active) {
+                return client;
+            }
+        }
+        // out of range or invalid slot
+        return NULL;
+    }
+    // slot undefined, search
     for (int i = 0; i < MAX_CLIENTS; i++) {
         client_info_t *client = server->clients[i];
         if (client && client->id == client_id && client->active) {
+            if (slot) {
+                *slot = i;
+            }
             return client;
         }
     }
     return NULL;
 }
 
-client_info_t* find_client_by_port_locked(mach_server_t *server, mach_port_t port) {
+client_info_t* find_client_by_port_locked(mach_server_t *server, mach_port_t port, int *slot) {
+    if (slot && *slot >= 0) {
+        // slot is defined, validate
+        if (*slot < MAX_CLIENTS) {
+            client_info_t *client = server->clients[*slot];
+            if (client && client->port == port && client->active) {
+                return client;
+            }
+        }
+        // out of range or invalid slot
+        return NULL;
+    }
+    // slot undefined, search
     for (int i = 0; i < MAX_CLIENTS; i++) {
         client_info_t *client = server->clients[i];
         if (client && client->port == port && client->active) {
+            if (slot) {
+                *slot = i;
+            }
             return client;
         }
     }

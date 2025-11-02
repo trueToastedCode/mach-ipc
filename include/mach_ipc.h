@@ -21,10 +21,11 @@ typedef struct mach_message mach_message_t;
 /* Client identifier - opaque to users */
 typedef struct {
     uint32_t id;
+    int slot;
     void *internal;  // Private - don't touch
 } client_handle_t;
 
-#define INVALID_CLIENT ((client_handle_t){0, NULL})
+#define INVALID_CLIENT ((client_handle_t){0, -1, NULL})
 #define IS_VALID_CLIENT(h) ((h).id != 0 && (h).internal != NULL)
 
 /* Message types - users can define custom types > 1000 */

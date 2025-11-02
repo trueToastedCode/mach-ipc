@@ -54,7 +54,7 @@ void destroy_client(client_info_t *client) {
     free(client);
 }
 
-static bool add_client(mach_server_t *server, client_info_t *client) {
+static int add_client(mach_server_t *server, client_info_t *client) {
     pthread_mutex_lock(&server->clients_lock);
     
     for (int i = 0; i < MAX_CLIENTS; i++) {
@@ -62,12 +62,12 @@ static bool add_client(mach_server_t *server, client_info_t *client) {
             server->clients[i] = client;
             server->client_count++;
             pthread_mutex_unlock(&server->clients_lock);
-            return true;
+            return i;
         }
     }
     
     pthread_mutex_unlock(&server->clients_lock);
-    return false;
+    return -1;
 }
 
 void remove_client(mach_server_t *server, client_info_t *client) {
@@ -99,6 +99,7 @@ static void handle_connect_request(
     mach_port_t client_port = header->msgh_remote_port;
     int status = 0;
     uint32_t client_id = 0;
+    int client_slot = -1;
     client_info_t *client = NULL;
     
     if (client_port == MACH_PORT_NULL) {
@@ -109,7 +110,7 @@ static void handle_connect_request(
     
     // Check if already connected
     pthread_mutex_lock(&server->clients_lock);
-    if (find_client_by_port_locked(server, client_port)) {
+    if (find_client_by_port_locked(server, client_port, NULL)) {
         pthread_mutex_unlock(&server->clients_lock);
         LOG_ERROR_MSG("Client already connected");
         status = IPC_ERROR_INTERNAL;
@@ -131,7 +132,8 @@ static void handle_connect_request(
     }
     
     // Add to client list
-    if (!add_client(server, client)) {
+    client_slot = add_client(server, client);
+    if (client_slot == -1) {
         LOG_ERROR_MSG("Client list is full");
         destroy_client(client);
         client = NULL;
@@ -168,6 +170,7 @@ send_reply:
     // Send reply
     internal_payload_t reply = (internal_payload_t){
         .client_id = client_id,
+        .client_slot = client_slot,
         .status = status
     };
     kr = protocol_send_ack(
@@ -189,14 +192,14 @@ send_reply:
     }
     
     if (status == IPC_SUCCESS) {
-        LOG_INFO_MSG("Client %u connected", client_id);
+        LOG_INFO_MSG("Client %u connected at slot %d", client_id, client_slot);
         
         // Notify user
         if (server->callbacks.on_client_connected) {
             dispatch_async(client->queue, ^{
                 server->callbacks.on_client_connected(
                     server,
-                    (client_handle_t){.id = client->id, .internal = client},
+                    (client_handle_t){.id = client->id, .slot = client_slot, .internal = client},
                     server->user_data
                 );
             });
@@ -214,7 +217,8 @@ static void handle_user_message(
 ) {
     // Find client
     pthread_mutex_lock(&server->clients_lock);
-    client_info_t *client = find_client_by_id_locked(server, payload->client_id);
+    int client_slot = payload->client_slot;
+    client_info_t *client = find_client_by_id_locked(server, payload->client_id, &client_slot);
     pthread_mutex_unlock(&server->clients_lock);
     
     if (!client) {
@@ -227,8 +231,8 @@ static void handle_user_message(
     uint32_t user_msg_type = header->msgh_id & INTERNAL_MSG_TYPE_MASK;
     bool needs_reply = HAS_FEATURE_WACK(header->msgh_id);
     
-    LOG_DEBUG_MSG("User message from client %u: type=%u, needs_reply=%d has_user_payload=%d",
-                  client->id, user_msg_type, needs_reply, user_payload != NULL);
+    LOG_DEBUG_MSG("User message from client id=%u slot=%d: type=%u, needs_reply=%d has_user_payload=%d",
+                  client->id, client_slot, user_msg_type, needs_reply, user_payload != NULL);
     
     // Dispatch to client's queue for sequential processing
     // reminder header will overwritten, can only use copies in async dispatch
@@ -246,7 +250,7 @@ static void handle_user_message(
                 int reply_status = IPC_SUCCESS;
                 void *reply_data = server->callbacks.on_message_with_reply(
                     server,
-                    (client_handle_t){.id = client_id, .internal = client},
+                    (client_handle_t){.id = client_id, .slot = client_slot, .internal = client},
                     user_msg_type,
                     user_payload,
                     user_payload_size,
@@ -257,7 +261,8 @@ static void handle_user_message(
 
                 // Send acknowledgment
                 internal_payload_t ack = (internal_payload_t){
-                    .client_id = client_id,
+                    .client_id = 0,
+                    .client_slot = -1,
                     .status = reply_status
                 };
                 protocol_send_ack(
@@ -277,7 +282,7 @@ static void handle_user_message(
             if (server->callbacks.on_message) {
                 server->callbacks.on_message(
                     server,
-                    (client_handle_t){.id = client->id, .internal = client},
+                    (client_handle_t){.id = client->id, .slot = client_slot, .internal = client},
                     user_msg_type,
                     user_payload,
                     user_payload_size,
@@ -296,18 +301,19 @@ static void handle_death_notification(mach_server_t *server, mach_msg_header_t *
     mach_dead_name_notification_t *notif = (mach_dead_name_notification_t*)header;
     
     pthread_mutex_lock(&server->clients_lock);
-    client_info_t *client = find_client_by_port_locked(server, notif->not_port);
+    int client_slot = -1;
+    client_info_t *client = find_client_by_port_locked(server, notif->not_port, &client_slot);
     pthread_mutex_unlock(&server->clients_lock);
     
     if (client) {
-        LOG_INFO_MSG("Client %u died", client->id);
+        LOG_INFO_MSG("Client id=%u slot=%d died", client->id, client_slot);
         
         // Notify user
         if (server->callbacks.on_client_disconnected) {
             dispatch_async(client->queue, ^{
                 server->callbacks.on_client_disconnected(
                     server,
-                    (client_handle_t){.id = client->id, .internal = client},
+                    (client_handle_t){.id = client->id, .slot = client_slot, .internal = client},
                     server->user_data
                 );
             });
@@ -461,7 +467,8 @@ ipc_status_t mach_server_send(
     }
 
     internal_payload_t payload = (internal_payload_t){
-        .client_id = 0, // Server doesn't have a client ID
+        .client_id = 0,    // Server doesn't have a client ID
+        .client_slot = -1, // Server doesn't have a client slot
         .status = IPC_SUCCESS
     };
     
@@ -498,7 +505,8 @@ ipc_status_t mach_server_send_with_reply(
     }
     
     internal_payload_t payload = (internal_payload_t){
-        .client_id = 0,
+        .client_id = 0,    // Server doesn't have a client ID
+        .client_slot = -1, // Server doesn't have a client slot
         .status = IPC_SUCCESS
     };
     

@@ -98,6 +98,7 @@ typedef struct {
 /* Payload structure sent in OOL descriptor */
 typedef struct {
     uint32_t client_id;         // Client identifier
+    int client_slot;            // Client slot
     uint64_t correlation_id;    // For ack matching (0 = no ack needed)
     int32_t status;             // Status code (0 = success)
 } internal_payload_t;
@@ -202,6 +203,7 @@ struct mach_client {
     mach_port_t local_port;
     char service_name[128];
     uint32_t client_id;             // Server-assigned ID
+    int client_slot;                // Server-assigned slot
     
     // Message handling
     pthread_t receiver_thread;
@@ -307,9 +309,9 @@ void protocol_receive_loop(
 // void copy_to_payload(internal_payload_t *payload, const void *data, size_t size);
 
 /* Find client by ID (server-side, must hold clients_lock) */
-client_info_t* find_client_by_id_locked(mach_server_t *server, uint32_t client_id);
+client_info_t* find_client_by_id_locked(mach_server_t *server, uint32_t client_id, int *slot);
 
 /* Find client by port (server-side, must hold clients_lock) */
-client_info_t* find_client_by_port_locked(mach_server_t *server, mach_port_t port);
+client_info_t* find_client_by_port_locked(mach_server_t *server, mach_port_t port, int *slot);
 
 #endif /* INTERNAL_H */

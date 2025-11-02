@@ -35,6 +35,7 @@ static void handle_user_message(
     mach_port_t server_port = client->server_port;
     uint64_t correlation_id = payload->correlation_id;
     uint32_t client_id = client->client_id;
+    int client_slot = client->client_slot;
     
     dispatch_async(client->message_queue, ^{
         if (needs_reply) {
@@ -55,6 +56,7 @@ static void handle_user_message(
                 // Send acknowledgment
                 internal_payload_t ack = (internal_payload_t){
                     .client_id = client_id,
+                    .client_slot = client_slot,
                     .status = reply_status
                 };
                 protocol_send_ack(
@@ -290,7 +292,8 @@ ipc_status_t mach_client_connect(
     
     // Send connect message
     internal_payload_t payload = (internal_payload_t){
-        .client_id = 0, // Will be assigned by server
+        .client_id = 0,    // Will be assigned by server
+        .client_slot = -1, // Will be assigned by server
         .status = IPC_SUCCESS
     };
     
@@ -336,12 +339,13 @@ ipc_status_t mach_client_connect(
     }
     
     client->client_id = ack_payload->client_id;
+    client->client_slot = ack_payload->client_slot;
     client->connected = 1;
     
     ply_free((void*)ack_payload, ack_size);
     ply_free((void*)ack_user_payload, ack_user_size);
     
-    LOG_INFO_MSG("Connected to server (client_id=%u)", client->client_id);
+    LOG_INFO_MSG("Connected to server (id=%u, slot=%d)", client->client_id, client->client_slot);
     
     // Notify user
     if (client->callbacks.on_connected) {
@@ -367,6 +371,7 @@ ipc_status_t mach_client_send(
     
     internal_payload_t payload = (internal_payload_t){
         .client_id = client->client_id,
+        .client_slot = client->client_slot,
         .status = IPC_SUCCESS
     };
     
@@ -398,6 +403,7 @@ ipc_status_t mach_client_send_with_reply(
     
     internal_payload_t payload = (internal_payload_t){
         .client_id = client->client_id,
+        .client_slot = client->client_slot,
         .status = IPC_SUCCESS
     };
     
