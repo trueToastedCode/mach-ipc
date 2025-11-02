@@ -557,6 +557,9 @@ ipc_status_t mach_server_send_with_reply(
     } else {
         *reply_data = NULL;
         *reply_size = 0;
+        if (kr == KERN_SUCCESS) {
+            return is_ack_status ? ack_status : IPC_SUCCESS;
+        }
     }
     
     return kr == KERN_OPERATION_TIMED_OUT ? IPC_ERROR_TIMEOUT : IPC_ERROR_SEND_FAILED;
