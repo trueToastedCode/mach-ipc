@@ -1,7 +1,6 @@
 # ============================================================================
-# Mach IPC Framework - Complete Makefile
+# Mach IPC Framework - Complete Makefile (CORRECTED & ROBUST)
 # ============================================================================
-
 PROJECT = mach_ipc
 VERSION = 1.0.0
 
@@ -27,14 +26,14 @@ LOG_LEVEL ?=
 ifeq ($(DEBUG), 1)
     CFLAGS += -DDEBUG -O0 -fsanitize=address,undefined
     LDFLAGS += -fsanitize=address,undefined
-	# Default to full debug logging unless user overrides it
+    # Default to full debug logging unless user overrides
     ifeq ($(LOG_LEVEL),)
-        LOG_LEVEL = 0   # LOG_DEBUG
+        LOG_LEVEL = 0  # LOG_DEBUG
     endif
 else
-	# Default to INFO level for release builds unless user overrides it
+    # Default to INFO level for release builds unless user overrides
     ifeq ($(LOG_LEVEL),)
-        LOG_LEVEL = 1   # LOG_INFO
+        LOG_LEVEL = 1  # LOG_INFO
     endif
 endif
 
@@ -79,21 +78,20 @@ TESTS = \
 # ============================================================================
 # Main targets
 # ============================================================================
-
 .PHONY: all clean test examples install uninstall help stress
 
 all: $(STATIC_LIB) $(DYNAMIC_LIB)
 	@echo "Build complete!"
-	@echo "Static library:  $(STATIC_LIB)"
+	@echo "Static library: $(STATIC_LIB)"
 	@echo "Dynamic library: $(DYNAMIC_LIB)"
 
-examples: $(EXAMPLES)
+examples: $(STATIC_LIB) $(EXAMPLES)
 	@echo "Examples built successfully"
 
-stress: $(BUILD_DIR)/stress_server $(BUILD_DIR)/stress_client
+stress: $(STATIC_LIB) $(BUILD_DIR)/stress_server $(BUILD_DIR)/stress_client
 	@echo "Stress test built successfully"
 
-test: $(TESTS)
+test: $(STATIC_LIB) $(TESTS)
 	@echo "Running tests..."
 	@for test in $(TESTS); do \
 		echo ""; \
@@ -101,30 +99,29 @@ test: $(TESTS)
 		$$test || exit 1; \
 	done
 	@echo ""
-	@echo "✓ All tests passed!"
+	@echo "All tests passed!"
 
 clean:
-	rm -rf $(BUILD_DIR) $(LIB_DIR)
+	@rm -rf $(BUILD_DIR) $(LIB_DIR)
 	@echo "Clean complete"
 
 install: $(STATIC_LIB) $(DYNAMIC_LIB) $(INC_DIR)/$(PROJECT).h
 	@echo "Installing to /usr/local..."
-	install -d /usr/local/lib
-	install -d /usr/local/include
-	install -m 644 $(STATIC_LIB) /usr/local/lib/
-	install -m 755 $(DYNAMIC_LIB) /usr/local/lib/
-	install -m 644 $(INC_DIR)/$(PROJECT).h /usr/local/include/
+	@install -d /usr/local/lib
+	@install -d /usr/local/include
+	@install -m 644 $(STATIC_LIB) /usr/local/lib/
+	@install -m 755 $(DYNAMIC_LIB) /usr/local/lib/
+	@install -m 644 $(INC_DIR)/$(PROJECT).h /usr/local/include/
 	@echo "Installation complete"
 
 uninstall:
-	rm -f /usr/local/lib/lib$(PROJECT).*
-	rm -f /usr/local/include/$(PROJECT).h
+	@rm -f /usr/local/lib/lib$(PROJECT).*
+	@rm -f /usr/local/include/$(PROJECT).h
 	@echo "Uninstall complete"
 
 # ============================================================================
 # Build rules
 # ============================================================================
-
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
@@ -145,37 +142,34 @@ $(DYNAMIC_LIB): $(FRAMEWORK_OBJS) | $(LIB_DIR)
 	@$(CC) -dynamiclib -o $@ $^ $(LDFLAGS)
 
 # ============================================================================
-# Examples
+# Examples - FIXED: Use | $(STATIC_LIB) as order-only prerequisite, NOT in $^
 # ============================================================================
-
-$(BUILD_DIR)/echo_server: $(EXAMPLE_DIR)/echo_server.c $(EXAMPLE_DIR)/echo.c $(STATIC_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/echo_server: $(EXAMPLE_DIR)/echo_server.c $(EXAMPLE_DIR)/echo.c | $(STATIC_LIB)
 	@echo "CC $@"
-	@$(CC) $(CFLAGS) $^ -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) $(EXAMPLE_DIR)/echo_server.c $(EXAMPLE_DIR)/echo.c -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/echo_client: $(EXAMPLE_DIR)/echo_client.c $(EXAMPLE_DIR)/echo.c $(STATIC_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/echo_client: $(EXAMPLE_DIR)/echo_client.c $(EXAMPLE_DIR)/echo.c | $(STATIC_LIB)
 	@echo "CC $@"
-	@$(CC) $(CFLAGS) $^ -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) $(EXAMPLE_DIR)/echo_client.c $(EXAMPLE_DIR)/echo.c -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/stress_server: $(EXAMPLE_DIR)/stress_test_server.c $(EXAMPLE_DIR)/stress_test.c $(STATIC_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/stress_server: $(EXAMPLE_DIR)/stress_test_server.c $(EXAMPLE_DIR)/stress_test.c | $(STATIC_LIB)
 	@echo "CC $@"
-	@$(CC) $(CFLAGS) $^ -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) $(EXAMPLE_DIR)/stress_test_server.c $(EXAMPLE_DIR)/stress_test.c -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/stress_client: $(EXAMPLE_DIR)/stress_test_client.c $(EXAMPLE_DIR)/stress_test.c $(STATIC_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/stress_client: $(EXAMPLE_DIR)/stress_test_client.c $(EXAMPLE_DIR)/stress_test.c | $(STATIC_LIB)
 	@echo "CC $@"
-	@$(CC) $(CFLAGS) $^ -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
+	@$(CC) $(CFLAGS) $(EXAMPLE_DIR)/stress_test_client.c $(EXAMPLE_DIR)/stress_test.c -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
 
 # ============================================================================
 # Tests
 # ============================================================================
-
-$(BUILD_DIR)/test_%: $(TEST_DIR)/test_%.c $(STATIC_LIB) | $(BUILD_DIR)
+$(BUILD_DIR)/test_%: $(TEST_DIR)/test_%.c | $(STATIC_LIB)
 	@echo "CC $@"
 	@$(CC) $(CFLAGS) $< -L$(LIB_DIR) -l$(PROJECT) $(LDFLAGS) -o $@
 
 # ============================================================================
 # Stress Test Suite
 # ============================================================================
-
 .PHONY: test-stress test-multi test-ping test-heavy test-burst test-broadcast test-timeout test-share test-stats
 
 test-stress: stress
@@ -268,7 +262,6 @@ test-stats: stress
 # ============================================================================
 # Project structure setup
 # ============================================================================
-
 .PHONY: setup
 setup:
 	@echo "Creating project structure..."
@@ -280,14 +273,12 @@ setup:
 	@echo "Project structure created"
 	@echo ""
 	@echo "Directory structure:"
-	@find . -type d -not -path '*/\.*' | sed 's|[^/]*/|  |g'
+	@find . -type d -not -path '*/\.*' | sed 's|[^/]*/| |g' - 
 
 # ============================================================================
 # Development helpers
 # ============================================================================
-
 .PHONY: format check
-
 format:
 	@echo "Formatting code..."
 	@clang-format -i $(SRC_DIR)/*.c $(INC_DIR)/*.h $(EXAMPLE_DIR)/*.c 2>/dev/null || echo "clang-format not found"
@@ -299,54 +290,53 @@ check:
 # ============================================================================
 # Help
 # ============================================================================
-
 help:
 	@echo "$(PROJECT) v$(VERSION) - Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all          - Build static and dynamic libraries (default)"
-	@echo "  examples     - Build all example programs"
-	@echo "  stress       - Build stress test suite"
-	@echo "  test         - Build and run all tests"
-	@echo "  clean        - Remove all build artifacts"
-	@echo "  install      - Install libraries to /usr/local (requires sudo)"
-	@echo "  uninstall    - Remove installed libraries (requires sudo)"
-	@echo "  setup        - Create project directory structure"
-	@echo "  format       - Format source code with clang-format"
-	@echo "  check        - Run static analysis with clang-tidy"
+	@echo " all         - Build static and dynamic libraries (default)"
+	@echo " examples    - Build all example programs"
+	@echo " stress      - Build stress test suite"
+	@echo " test        - Build and run all tests"
+	@echo " clean       - Remove all build artifacts"
+	@echo " install     - Install libraries to /usr/local (requires sudo)"
+	@echo " uninstall   - Remove installed libraries (requires sudo)"
+	@echo " setup       - Create project directory structure"
+	@echo " format      - Format source code with clang-format"
+	@echo " check       - Run static analysis with clang-tidy"
 	@echo ""
 	@echo "Stress Test Targets:"
-	@echo "  test-stress     - Run full stress test (single client)"
-	@echo "  test-multi      - Run with 5 concurrent clients"
-	@echo "  test-ping       - Test 1: Ping flood (1000 messages)"
-	@echo "  test-heavy      - Test 2: Heavy payloads (1-10MB)"
-	@echo "  test-burst      - Test 3: Burst mode (500 messages)"
-	@echo "  test-broadcast  - Test 4: Broadcast messaging"
-	@echo "  test-timeout    - Test 5: Timeout handling"
-	@echo "  test-share      - Test 6: Shared memory (UPSH)"
-	@echo "  test-stats      - Test 7: Server statistics"
+	@echo " test-stress     - Run full stress test (single client)"
+	@echo " test-multi      - Run with 5 concurrent clients"
+	@echo " test-ping       - Test 1: Ping flood (1000 messages)"
+	@echo " test-heavy      - Test 2: Heavy payloads (1-10MB)"
+	@echo " test-burst      - Test 3: Burst mode (500 messages)"
+	@echo " test-broadcast  - Test 4: Broadcast messaging"
+	@echo " test-timeout    - Test 5: Timeout handling"
+	@echo " test-share      - Test 6: Shared memory (UPSH)"
+	@echo " test-stats      - Test 7: Server statistics"
 	@echo ""
 	@echo "Options:"
-	@echo "  DEBUG=1      - Build with debug symbols and sanitizers"
+	@echo " DEBUG=1     - Build with debug symbols and sanitizers"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make                    # Build libraries"
-	@echo "  make examples           # Build examples"
-	@echo "  make test               # Run tests"
-	@echo "  make stress             # Build stress test"
-	@echo "  make test-stress        # Run stress test"
-	@echo "  make test-multi         # Run with multiple clients"
-	@echo "  make DEBUG=1 all        # Debug build"
-	@echo "  sudo make install       # Install system-wide"
+	@echo " make                  # Build libraries"
+	@echo " make examples         # Build examples"
+	@echo " make test             # Run tests"
+	@echo " make stress           # Build stress test"
+	@echo " make test-stress      # Run stress test"
+	@echo " make test-multi       # Run with multiple clients"
+	@echo " make DEBUG=1 all      # Debug build"
+	@echo " sudo make install     # Install system-wide"
 	@echo ""
 	@echo "Quick Start - Echo Example:"
-	@echo "  1. make all examples"
-	@echo "  2. Terminal 1: ./build/echo_server"
-	@echo "  3. Terminal 2: ./build/echo_client"
+	@echo " 1. make all examples"
+	@echo " 2. Terminal 1: ./build/echo_server"
+	@echo " 3. Terminal 2: ./build/echo_client"
 	@echo ""
 	@echo "Quick Start - Stress Test:"
-	@echo "  1. make stress"
-	@echo "  2. make test-stress     # Single client test"
-	@echo "  3. make test-multi      # Multiple clients test"
+	@echo " 1. make stress"
+	@echo " 2. make test-stress     # Single client test"
+	@echo " 3. make test-multi      # Multiple clients test"
 
 .DEFAULT_GOAL := all
