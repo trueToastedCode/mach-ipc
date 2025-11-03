@@ -233,39 +233,25 @@ kern_return_t protocol_send_with_ack(
     bool was_received = atomic_load_explicit(&waiter->received, memory_order_acquire);
     bool was_cancelled = atomic_load_explicit(&waiter->cancelled, memory_order_acquire);
     
-    if (got_reply && was_received && !was_cancelled) {
+    if (was_received) {
         // SUCCESS: Got reply before timeout
-        LOG_INFO_MSG("Ack received (correlation_id=%llu)", correlation_id);
+        if (was_cancelled || !got_reply) {
+            // RACE CONDITION: Ack arrived after timeout but before we set cancelled
+            // we have now have the ownership of the payload
+            // time passed since timeout it minimal, still conidered success
+            LOG_WARN_MSG("Ack arrived but already during timeout handling (correlation_id=%llu)", correlation_id);
+        } else {
+            LOG_INFO_MSG("Ack received (correlation_id=%llu)", correlation_id);
+        }
+        
         *ack_payload = waiter->reply_payload;
         *ack_size = waiter->reply_size;
         *ack_user_payload = waiter->reply_user_payload;
         *ack_user_size = waiter->reply_user_size;
         result = KERN_SUCCESS;
-    } else if (was_received && was_cancelled) {
-        // RACE CONDITION: Ack arrived after timeout but before we set cancelled
-        // We need to clean up the payload that the ack handler stored
-        LOG_WARN_MSG("Ack arrived during timeout handling (correlation_id=%llu), cleaning up", 
-                    correlation_id);
-        
-        if (waiter->reply_payload) {
-            vm_deallocate(mach_task_self(), 
-                          (vm_address_t)waiter->reply_payload, 
-                          waiter->reply_size);
-        }
-        if (waiter->reply_user_payload && waiter->reply_user_size) {
-            vm_deallocate(mach_task_self(), 
-                          (vm_address_t)waiter->reply_user_payload, 
-                          waiter->reply_user_size);
-        }
-        
-        *ack_payload = NULL;
-        *ack_size = 0;
-        *ack_user_payload = NULL;
-        *ack_user_size = 0;
-        result = KERN_OPERATION_TIMED_OUT;
     } else {
         // TIMEOUT: No ack arrived (or arrived way too late)
-        LOG_ERROR_MSG("Ack timeout (correlation_id=%llu)", correlation_id);
+        LOG_DEBUG_MSG("Ack timeout (correlation_id=%llu)", correlation_id);
         
         *ack_payload = NULL;
         *ack_size = 0;
@@ -326,7 +312,10 @@ static bool handle_ack_message(
     const void *user_payload,
     size_t user_payload_size
 ) {
-    if (payload->correlation_id == 0) {
+    // Here it still owns the payload and can savely access it
+    uint64_t correlation_id = payload->correlation_id;
+
+    if (correlation_id == 0) {
         LOG_ERROR_MSG("Received ack with correlation_id=0");
         return false;
     }
@@ -340,7 +329,7 @@ static bool handle_ack_message(
         if (!pool_is_active(ack_pool, i)) continue;
         
         ack_waiter_t *w = (ack_waiter_t*)pool_get(ack_pool, i);
-        if (w && w->correlation_id == payload->correlation_id) {
+        if (w && w->correlation_id == correlation_id) {
             waiter = w;
             break;
         }
@@ -349,7 +338,7 @@ static bool handle_ack_message(
     if (!waiter) {
         pthread_mutex_unlock(ack_lock);
         LOG_WARN_MSG("Ack for unknown correlation_id=%llu (already cleaned up?)", 
-                     payload->correlation_id);
+                     correlation_id);
         return false;
     }
     
@@ -360,7 +349,7 @@ static bool handle_ack_message(
     if (was_cancelled) {
         pthread_mutex_unlock(ack_lock);
         LOG_WARN_MSG("Ack arrived after timeout (correlation_id=%llu), discarding", 
-                     payload->correlation_id);
+                     correlation_id);
         // Caller will deallocate the payload
         return false;
     }
@@ -375,11 +364,11 @@ static bool handle_ack_message(
     
     // Signal waiter thread
     event_signal(waiter->event);
-    
+
     pthread_mutex_unlock(ack_lock);
     
     LOG_DEBUG_MSG("Matched ack to waiter (correlation_id=%llu)", 
-                  payload->correlation_id);
+                  correlation_id);
     
     // Return true to indicate we took ownership of the payload
     return true;
