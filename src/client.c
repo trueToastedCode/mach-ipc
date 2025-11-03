@@ -34,6 +34,7 @@ static void handle_user_message(
     uint32_t msgh_id = header->msgh_id;
     mach_port_t server_port = client->server_port;
     uint64_t correlation_id = payload->correlation_id;
+    int correlation_slot = payload->correlation_slot;
     uint32_t client_id = client->client_id;
     int client_slot = client->client_slot;
     
@@ -63,6 +64,7 @@ static void handle_user_message(
                     server_port,
                     msgh_id,
                     correlation_id,
+                    correlation_slot,
                     &ack,
                     sizeof(ack),
                     reply_data,

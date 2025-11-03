@@ -177,6 +177,7 @@ send_reply:
         client_port,
         header->msgh_id,
         payload->correlation_id,
+        payload->correlation_slot,
         &reply,
         sizeof(reply),
         NULL,
@@ -240,6 +241,7 @@ static void handle_user_message(
     // so it stays available without expensive copies
     mach_port_t client_port = client->port;
     uint64_t correlation_id = payload->correlation_id;
+    int correlation_slot = payload->correlation_slot;
     uint32_t client_id = client->id;
 
     dispatch_async(client->queue, ^{
@@ -269,6 +271,7 @@ static void handle_user_message(
                     client_port,
                     msgh_id,
                     correlation_id,
+                    correlation_slot,
                     &ack,
                     sizeof(ack),
                     reply_data,

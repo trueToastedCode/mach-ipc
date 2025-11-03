@@ -33,6 +33,7 @@ typedef struct {
     uint32_t client_id;         // Client identifier
     int client_slot;            // Client slot
     uint64_t correlation_id;    // For ack matching (0 = no ack needed)
+    int correlation_slot;       // For ack lookup
     int32_t status;             // Status code (0 = success)
 } internal_payload_t;
 
@@ -202,6 +203,7 @@ kern_return_t protocol_send_ack(
     mach_port_t dest_port,
     mach_msg_id_t original_msg_id,
     uint64_t correlation_id,
+    int correlation_slot,
     internal_payload_t *ack_payload,
     size_t ack_payload_size,
     const void *ack_user_payload,

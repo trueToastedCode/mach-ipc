@@ -52,6 +52,11 @@ kern_return_t protocol_send_message(
         LOG_ERROR_MSG("Invalid payload");
         return KERN_INVALID_ARGUMENT;
     }
+
+    if (!HAS_FEATURE_WACK(msg_id) && !HAS_FEATURE_IACK(msg_id)) {
+        payload->correlation_id = 0;
+        payload->correlation_slot = -1;
+    }
     
     internal_mach_msg_t msg;
     memset(&msg, 0, sizeof(msg));
@@ -112,7 +117,7 @@ kern_return_t protocol_send_message(
  * ACKNOWLEDGMENT HANDLING
  * ============================================================================ */
 
-static bool register_ack_waiter(
+static int register_ack_waiter(
     Pool *ack_pool,
     pthread_mutex_t *ack_lock,
     uint64_t correlation_id,
@@ -120,7 +125,7 @@ static bool register_ack_waiter(
 ) {
     if (correlation_id == 0) {
         LOG_ERROR_MSG("Cannot register ack with correlation_id=0");
-        return false;
+        return -1;
     }
     
     pthread_mutex_lock(ack_lock);
@@ -129,7 +134,7 @@ static bool register_ack_waiter(
     if (slot == -1) {
         pthread_mutex_unlock(ack_lock);
         LOG_ERROR_MSG("Ack pool is full");
-        return false;
+        return -1;
     }
     
     ack_waiter_t *waiter = (ack_waiter_t*)pool_get(ack_pool, slot);
@@ -137,7 +142,7 @@ static bool register_ack_waiter(
         pool_pop(ack_pool, slot);
         pthread_mutex_unlock(ack_lock);
         LOG_ERROR_MSG("Failed to get ack waiter from pool");
-        return false;
+        return -1;
     }
     
     event_t *evt = event_create();
@@ -145,7 +150,7 @@ static bool register_ack_waiter(
         pool_pop(ack_pool, slot);
         pthread_mutex_unlock(ack_lock);
         LOG_ERROR_MSG("Failed to create ack event");
-        return false;
+        return -1;
     }
     
     // Initialize atomic fields with atomic_init (must be done before any concurrent access)
@@ -163,7 +168,7 @@ static bool register_ack_waiter(
     *waiter_out = waiter;
     
     pthread_mutex_unlock(ack_lock);
-    return true;
+    return slot;
 }
 
 kern_return_t protocol_send_with_ack(
@@ -183,6 +188,11 @@ kern_return_t protocol_send_with_ack(
     size_t *ack_user_size,
     uint32_t timeout_ms
 ) {
+    if (!payload || payload_size < sizeof(internal_payload_t)) {
+        LOG_ERROR_MSG("Invalid payload");
+        return KERN_INVALID_ARGUMENT;
+    }
+
     // Assign correlation ID
     pthread_mutex_lock(ack_lock);
     uint64_t correlation_id = (*next_correlation_id)++;
@@ -192,9 +202,12 @@ kern_return_t protocol_send_with_ack(
     
     // Register ack waiter
     ack_waiter_t *waiter = NULL;
-    if (!register_ack_waiter(ack_pool, ack_lock, correlation_id, &waiter)) {
+    int ack_slot = register_ack_waiter(ack_pool, ack_lock, correlation_id, &waiter);
+    if (ack_slot < 0) {
         return KERN_FAILURE;
     }
+    
+    payload->correlation_slot = ack_slot;
     
     // Send message with WACK feature
     mach_msg_id_t ack_msg_id = SET_FEATURE(msg_id, INTERNAL_FEATURE_WACK);
@@ -274,6 +287,7 @@ kern_return_t protocol_send_ack(
     mach_port_t dest_port,
     mach_msg_id_t original_msg_id,
     uint64_t correlation_id,
+    int correlation_slot,
     internal_payload_t *ack_payload,
     size_t ack_payload_size,
     const void *ack_user_payload,
@@ -283,8 +297,13 @@ kern_return_t protocol_send_ack(
         LOG_ERROR_MSG("Cannot send ack with correlation_id=0");
         return KERN_INVALID_ARGUMENT;
     }
+    if (correlation_slot < 0) {
+        LOG_ERROR_MSG("Cannot send ack with correlation_slot<0");
+        return KERN_INVALID_ARGUMENT;
+    }
     
     ack_payload->correlation_id = correlation_id;
+    ack_payload->correlation_slot = correlation_slot;
     
     // Set IACK feature, remove WACK if present
     mach_msg_id_t ack_msg_id = original_msg_id;
@@ -319,23 +338,15 @@ static bool handle_ack_message(
         LOG_ERROR_MSG("Received ack with correlation_id=0");
         return false;
     }
+
+    int correlation_slot = payload->correlation_slot;
     
     pthread_mutex_lock(ack_lock);
     
     // Find matching waiter
-    ack_waiter_t *waiter = NULL;
-    
-    for (int i = 0; i < ack_pool->capacity; i++) {
-        if (!pool_is_active(ack_pool, i)) continue;
-        
-        ack_waiter_t *w = (ack_waiter_t*)pool_get(ack_pool, i);
-        if (w && w->correlation_id == correlation_id) {
-            waiter = w;
-            break;
-        }
-    }
-    
-    if (!waiter) {
+    // pool will validate the slot index and that it's active
+    ack_waiter_t *waiter = (ack_waiter_t*)pool_get(ack_pool, correlation_slot);
+    if (!waiter || waiter->correlation_id != correlation_id) {
         pthread_mutex_unlock(ack_lock);
         LOG_WARN_MSG("Ack for unknown correlation_id=%llu (already cleaned up?)", 
                      correlation_id);
