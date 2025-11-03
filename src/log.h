@@ -8,7 +8,9 @@
 #define LOG_ERROR  3
 
 // Set the active log level here
+#ifndef LOG_LEVEL
 #define LOG_LEVEL LOG_DEBUG
+#endif
 
 // Helper macro to handle variable arguments with file and line info
 #define LOG_PRINT(stream, level, fmt, ...) do { \

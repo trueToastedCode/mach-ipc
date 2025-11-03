@@ -495,7 +495,6 @@ void mach_client_destroy(mach_client_t *client) {
         dispatch_sync(client->message_queue, ^{});
     }
     
-    resource_tracker_cleanup_all(client->resources);
     resource_tracker_destroy(client->resources);
     
     free(client);

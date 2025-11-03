@@ -590,7 +590,6 @@ void mach_server_destroy(mach_server_t *server) {
         }
     }
     
-    resource_tracker_cleanup_all(server->resources);
     resource_tracker_destroy(server->resources);
     
     free(server);

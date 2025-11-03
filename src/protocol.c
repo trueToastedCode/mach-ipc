@@ -241,7 +241,7 @@ kern_return_t protocol_send_with_ack(
             // time passed since timeout it minimal, still conidered success
             LOG_WARN_MSG("Ack arrived but already during timeout handling (correlation_id=%llu)", correlation_id);
         } else {
-            LOG_INFO_MSG("Ack received (correlation_id=%llu)", correlation_id);
+            LOG_DEBUG_MSG("Ack received (correlation_id=%llu)", correlation_id);
         }
         
         *ack_payload = waiter->reply_payload;
