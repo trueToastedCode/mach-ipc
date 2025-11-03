@@ -455,7 +455,7 @@ void protocol_receive_loop(
         // Extract payload
         internal_payload_t *payload = (internal_payload_t*)intrl_mach_msg->payload.address;
         size_t payload_size = intrl_mach_msg->payload.size;
-        const void *user_payload = (internal_payload_t*)intrl_mach_msg->user_payload.address;
+        const void *user_payload = (const void *)intrl_mach_msg->user_payload.address;
         size_t user_payload_size = intrl_mach_msg->user_payload.size;
         
         if (!payload || payload_size < sizeof(internal_payload_t)) {
