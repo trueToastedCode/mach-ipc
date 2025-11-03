@@ -35,6 +35,7 @@ typedef struct {
     uint64_t correlation_id;    // For ack matching (0 = no ack needed)
     int correlation_slot;       // For ack lookup
     int32_t status;             // Status code (0 = success)
+    struct timespec user_payload_deadline;
 } internal_payload_t;
 
 #define INTERNAL_RCV_BUFFER_SIZE (sizeof(internal_mach_msg_t) + 1024)
@@ -76,6 +77,8 @@ typedef struct {
     atomic_bool received;
     atomic_bool cancelled;  // Prevents use-after-free on timeout race
 } ack_waiter_t;
+
+#define USER_PLY_SAFETY_MS 10ULL
 
 /* ============================================================================
  * CLIENT INFO (Server-side)
@@ -176,7 +179,8 @@ kern_return_t protocol_send_message(
     internal_payload_t *payload,
     size_t payload_size,
     const void *user_payload,
-    size_t user_payload_size
+    size_t user_payload_size,
+    uint64_t user_payload_tio_ms
 );
 
 /* Send a message and wait for ack */
@@ -195,7 +199,7 @@ kern_return_t protocol_send_with_ack(
     size_t *ack_size,
     const void **ack_user_payload,
     size_t *ack_user_size,
-    uint32_t timeout_ms
+    uint64_t timeout_ms
 );
 
 /* Send an acknowledgment */
@@ -248,5 +252,11 @@ client_info_t* find_client_by_id_locked(mach_server_t *server, uint32_t client_i
 
 /* Find client by port (server-side, must hold clients_lock) */
 client_info_t* find_client_by_port_locked(mach_server_t *server, mach_port_t port, int *slot);
+
+struct timespec calc_deadline(uint64_t timeout_ms);
+
+bool is_deadline_expired(struct timespec deadline, uint64_t safety_ms);
+
+bool has_no_deadline(struct timespec deadline);
 
 #endif /* INTERNAL_H */

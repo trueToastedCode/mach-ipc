@@ -46,7 +46,8 @@ kern_return_t protocol_send_message(
     internal_payload_t *payload,
     size_t payload_size,
     const void *user_payload,
-    size_t user_payload_size
+    size_t user_payload_size,
+    uint64_t user_payload_tio_ms
 ) {
     if (!payload || payload_size < sizeof(internal_payload_t)) {
         LOG_ERROR_MSG("Invalid payload");
@@ -75,12 +76,16 @@ kern_return_t protocol_send_message(
     // Set up body and OOL descriptor
     msg.body.msgh_descriptor_count = 2;
 
+    payload->user_payload_deadline = (payload && payload_size && user_payload_tio_ms && HAS_FEATURE_UPSH(msg_id))
+        ? calc_deadline(user_payload_tio_ms)
+        : (struct timespec){ .tv_sec = 0, .tv_nsec = 0 };
+
     msg.payload.address = payload;
     msg.payload.size = payload_size;
     msg.payload.copy = MACH_MSG_VIRTUAL_COPY;
     msg.payload.deallocate = false;
     msg.payload.type = MACH_MSG_OOL_DESCRIPTOR;
-
+    
     msg.user_payload.address = (void*)user_payload;
     msg.user_payload.size = user_payload_size;
     msg.user_payload.copy = HAS_FEATURE_UPSH(msg_id)
@@ -186,7 +191,7 @@ kern_return_t protocol_send_with_ack(
     size_t *ack_size,
     const void **ack_user_payload,
     size_t *ack_user_size,
-    uint32_t timeout_ms
+    uint64_t timeout_ms
 ) {
     if (!payload || payload_size < sizeof(internal_payload_t)) {
         LOG_ERROR_MSG("Invalid payload");
@@ -213,7 +218,8 @@ kern_return_t protocol_send_with_ack(
     mach_msg_id_t ack_msg_id = SET_FEATURE(msg_id, INTERNAL_FEATURE_WACK);
     kern_return_t kr = protocol_send_message(dest_port, reply_port, 
                                              ack_msg_id, payload, payload_size,
-                                             user_payload, user_payload_size);
+                                             user_payload, user_payload_size, 
+                                             timeout_ms);
     
     if (kr != KERN_SUCCESS) {
         // Cleanup waiter
@@ -225,11 +231,18 @@ kern_return_t protocol_send_with_ack(
         return kr;
     }
     
-    LOG_DEBUG_MSG("Waiting for ack (correlation_id=%llu, timeout=%ums)", 
+    LOG_DEBUG_MSG("Waiting for ack (correlation_id=%llu, timeout=%" PRIu64 "ms)",
                   correlation_id, timeout_ms);
     
     // Wait for reply (lock is released during wait)
-    bool got_reply = event_wait_timeout(waiter->event, timeout_ms);
+    bool got_reply;
+    if (timeout_ms) {
+        got_reply = event_wait_timeout(waiter->event, timeout_ms);
+    } else {
+        // no timeout means wait indefinitely
+        event_wait(waiter->event);
+        got_reply = true;
+    }
     
     // CRITICAL FIX: Set cancelled atomically BEFORE checking received
     // This prevents the race where ack arrives between timeout and lock acquisition
@@ -316,7 +329,7 @@ kern_return_t protocol_send_ack(
     
     return protocol_send_message(dest_port, MACH_PORT_NULL, 
                                  ack_msg_id, ack_payload, ack_payload_size,
-                                 ack_user_payload, ack_user_payload_size);
+                                 ack_user_payload, ack_user_payload_size, 0);
 }
 
 /* ============================================================================

@@ -109,3 +109,52 @@ void mach_server_disconnect_client(mach_server_t *server, client_handle_t client
     remove_client(server, client_info);
     destroy_client(client_info);
 }
+
+struct timespec calc_deadline(uint64_t timeout_ms) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    struct timespec timeout;
+
+    // convert milliseconds → seconds + nanoseconds
+    timeout.tv_sec  = now.tv_sec + (timeout_ms / 1000);
+    timeout.tv_nsec = now.tv_nsec + (timeout_ms % 1000) * 1000000ULL;
+
+    // normalize in case tv_nsec >= 1 second
+    if (timeout.tv_nsec >= 1000000000L) {
+        timeout.tv_sec += 1;
+        timeout.tv_nsec -= 1000000000L;
+    }
+
+    return timeout;
+}
+
+bool is_deadline_expired(struct timespec deadline, uint64_t safety_ms) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    // Safety margin in nanoseconds
+    long safety_ns = safety_ms * 1000000L;
+
+    // Deadline + Safety
+    struct timespec safe_deadline = deadline;
+    safe_deadline.tv_nsec += safety_ns;
+
+    // Normalize tv_nsec >= 1e9
+    if (safe_deadline.tv_nsec >= 1000000000L) {
+        safe_deadline.tv_sec += safe_deadline.tv_nsec / 1000000000L;
+        safe_deadline.tv_nsec = safe_deadline.tv_nsec % 1000000000L;
+    }
+
+    // Compare now vs safe_deadline
+    if (now.tv_sec > safe_deadline.tv_sec)
+        return true;
+    if (now.tv_sec == safe_deadline.tv_sec && now.tv_nsec >= safe_deadline.tv_nsec)
+        return true;
+
+    return false;
+}
+
+bool has_no_deadline(struct timespec deadline) {
+    return deadline.tv_sec == 0 && deadline.tv_nsec == 0;
+}

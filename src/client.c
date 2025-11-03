@@ -37,28 +37,54 @@ static void handle_user_message(
     int correlation_slot = payload->correlation_slot;
     uint32_t client_id = client->client_id;
     int client_slot = client->client_slot;
+    struct timespec user_payload_deadline = payload->user_payload_deadline;
     
     dispatch_async(client->message_queue, ^{
+        bool user_payload_is_save =
+            has_no_deadline(user_payload_deadline) ||
+            !is_deadline_expired(user_payload_deadline, USER_PLY_SAFETY_MS);
         if (needs_reply) {
             // Message with reply
-            if (client->callbacks.on_message_with_reply) {
-                size_t reply_size = 0;
-                int reply_status = IPC_SUCCESS;
-                void *reply_data = client->callbacks.on_message_with_reply(
-                    client,
-                    user_msg_type,
-                    user_payload,
-                    user_payload_size,
-                    &reply_size,
-                    client->user_data,
-                    &reply_status
-                );
-                
-                // Send acknowledgment
+            if (user_payload_is_save) {
+                if (client->callbacks.on_message_with_reply) {
+                    size_t reply_size = 0;
+                    int reply_status = IPC_SUCCESS;
+                    void *reply_data = client->callbacks.on_message_with_reply(
+                        client,
+                        user_msg_type,
+                        user_payload,
+                        user_payload_size,
+                        &reply_size,
+                        client->user_data,
+                        &reply_status
+                    );
+                    
+                    // Send acknowledgment
+                    internal_payload_t ack = (internal_payload_t){
+                        .client_id = client_id,
+                        .client_slot = client_slot,
+                        .status = reply_status
+                    };
+                    protocol_send_ack(
+                        server_port,
+                        msgh_id,
+                        correlation_id,
+                        correlation_slot,
+                        &ack,
+                        sizeof(ack),
+                        reply_data,
+                        reply_size
+                    );
+                    
+                    ipc_free(reply_data);
+                }
+            } else {
+                // User payload considered dangerous
+                LOG_ERROR_MSG("Message with id=%u and reply rejected because the user payload has reached it's deadline", msgh_id);
                 internal_payload_t ack = (internal_payload_t){
                     .client_id = client_id,
                     .client_slot = client_slot,
-                    .status = reply_status
+                    .status = IPC_ERROR_TIMEOUT
                 };
                 protocol_send_ack(
                     server_port,
@@ -67,22 +93,26 @@ static void handle_user_message(
                     correlation_slot,
                     &ack,
                     sizeof(ack),
-                    reply_data,
-                    reply_size
+                    NULL,
+                    0
                 );
-                
-                ipc_free(reply_data);
             }
         } else {
             // Fire-and-forget message
-            if (client->callbacks.on_message) {
-                client->callbacks.on_message(
-                    client,
-                    user_msg_type,
-                    user_payload,
-                    user_payload_size,
-                    client->user_data
-                );
+            if (user_payload_is_save) {
+                // User payload considered save
+                if (client->callbacks.on_message) {
+                    client->callbacks.on_message(
+                        client,
+                        user_msg_type,
+                        user_payload,
+                        user_payload_size,
+                        client->user_data
+                    );
+                }
+            } else {
+                // User payload considered dangerous
+                LOG_ERROR_MSG("Message with id=%u ignored because the user payload has reached it's deadline", msgh_id);
             }
         }
         
@@ -384,7 +414,8 @@ ipc_status_t mach_client_send(
         &payload,
         sizeof(payload),
         data,
-        size
+        size,
+        0
     );
     
     return kr == KERN_SUCCESS ? IPC_SUCCESS : IPC_ERROR_SEND_FAILED;
