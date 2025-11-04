@@ -77,9 +77,21 @@ kern_return_t protocol_send_message(
     // Set up body and OOL descriptor
     msg.body.msgh_descriptor_count = 2;
 
-    payload->user_payload_deadline = (payload && payload_size && user_payload_tio_ms && HAS_FEATURE_UPSH(msg_id))
-        ? calc_deadline(user_payload_tio_ms)
-        : (struct timespec){ .tv_sec = 0, .tv_nsec = 0 };
+    if (
+        HAS_FEATURE_UPSH(msg_id)&& 
+        payload &&
+        payload_size &&
+        user_payload_tio_ms
+    ) {
+        if (user_payload_tio_ms < USER_PLY_SAFETY_MS) {
+            LOG_ERROR_MSG("Timeout for shared user payload must at least be the safety "
+                          "margin of %" PRIu64 "ms", USER_PLY_SAFETY_MS);
+            return KERN_INVALID_ARGUMENT;
+        }
+        payload->user_payload_deadline = calc_deadline(user_payload_tio_ms);
+    } else {
+        payload->user_payload_deadline = (struct timespec){ .tv_sec = 0, .tv_nsec = 0 };
+    }
 
     msg.payload.address = payload;
     msg.payload.size = payload_size;
