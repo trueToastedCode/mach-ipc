@@ -174,7 +174,7 @@ void remove_client(mach_server_t *server, client_info_t *client);
 /* Send a message (low-level) */
 kern_return_t protocol_send_message(
     mach_port_t dest_port,
-    mach_port_t reply_port,
+    mach_port_t local_port,
     mach_msg_id_t msg_id,
     internal_payload_t *payload,
     size_t payload_size,

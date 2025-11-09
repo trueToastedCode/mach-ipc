@@ -3,8 +3,14 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <inttypes.h>
 
 static mach_server_t *g_server = NULL;
+
+// for this example we will only have one client
+pthread_mutex_t shmem_lock;
+shared_memory_t *shmem = NULL;
 
 void signal_handler(int sig) {
     (void)sig;
@@ -23,11 +29,17 @@ void on_client_connected(mach_server_t *server, client_handle_t client, void *da
 void on_client_disconnected(mach_server_t *server, client_handle_t client, void *data) {
     (void)server;
     (void)data;
+
     printf("Client %u disconnected\n", client.id);
+
+    pthread_mutex_lock(&shmem_lock);
+    shared_memory_destroy(shmem);
+    shmem = NULL;
+    pthread_mutex_unlock(&shmem_lock);
 }
 
 void on_message(mach_server_t *server, client_handle_t client, 
-                uint32_t msg_type, const void *data, size_t size, void *user_data) {
+                mach_port_t *remote_port, uint32_t msg_type, const void *data, size_t size, void *user_data) {
     (void)server;
     (void)client;
     (void)user_data;
@@ -37,20 +49,51 @@ void on_message(mach_server_t *server, client_handle_t client,
 }
 
 void* on_message_with_reply(mach_server_t *server, client_handle_t client,
-                            uint32_t msg_type, const void *data, size_t size,
+                            mach_port_t *remote_port, uint32_t msg_type, const void *data, size_t size,
                             size_t *reply_size, void *user_data, int *reply_status) {
     (void)user_data;
     (void)reply_status;
     void *reply = NULL;
-    if (msg_type == MSG_TYPE_ECHO) {
-        printf("Client %u: %.*s\n", client.id, (int)size, (char*)data);
-        
-        // Echo back
-        reply = ipc_alloc(size);
-        memcpy(reply, data, size);
-        *reply_size = size;
-        *reply_status = ECHO_CUSTOM_STATUS;
 
+    if (msg_type == MSG_TYPE_SET_ECHO_SHM) {
+        pthread_mutex_lock(&shmem_lock);
+        if (shmem) {
+            *reply_status = IPC_ERROR_INTERNAL;
+            pthread_mutex_unlock(&shmem_lock);
+            return NULL;
+        }
+        kern_return_t kr = shared_memory_map(
+            *remote_port,
+            *((size_t*)data),
+            &shmem
+        );
+        if (kr != KERN_SUCCESS) {
+            *reply_status = IPC_ERROR_INTERNAL;
+            pthread_mutex_unlock(&shmem_lock);
+            return NULL;
+        }
+        *remote_port = MACH_PORT_NULL; // set it to null because we have taken ownership
+        printf("Shared memory with %" PRIu64 " bytes has been mapped!\n", shmem->size);
+        pthread_mutex_unlock(&shmem_lock);
+        return NULL;
+    }
+
+    if (msg_type == MSG_TYPE_ECHO) {
+        pthread_mutex_lock(&shmem_lock);
+        if (!shmem) {
+            *reply_status = IPC_ERROR_INTERNAL;
+            pthread_mutex_unlock(&shmem_lock);
+            return NULL;
+        }
+        printf("Client %u: %.*s\n", client.id,
+               (int)shared_memory_get_size(shmem), (char*)shared_memory_get_data(shmem));
+        const char *echo_message = "Hello from server! Data in shared memory.";
+        size_t echo_message_len = strlen(echo_message) + 1;
+        snprintf(shared_memory_get_data(shmem), shared_memory_get_size(shmem),
+                 "%s", echo_message);
+        pthread_mutex_unlock(&shmem_lock);
+        *reply_status = ECHO_CUSTOM_STATUS;
+        
         // also trigger send a silent msg
         const char *silent_message = "Hello from server!";
         printf("Sending: %s\n", silent_message);
@@ -62,6 +105,7 @@ void* on_message_with_reply(mach_server_t *server, client_handle_t client,
             printf("Silent msg failed: %s\n", ipc_status_string(status));
         }
     }
+
     return reply;
 }
 

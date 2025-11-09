@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 
 /* ============================================================================
  * MESSAGE ID ENCODING (keep your original design)
@@ -22,7 +24,8 @@
 #define INTERNAL_FEATURE_ITRN   (1UL << 8)   // For internal usage (seperate internel/external messages types and define same types without collision)
 #define INTERNAL_FEATURE_WACK   (1UL << 9)   // Wait for acknowledgment (will be set/unset automatically)
 #define INTERNAL_FEATURE_IACK   (1UL << 10)  // Is an acknowledgment (will be set/unset automatically)
-#define INTERNAL_FEATURE_UPSH   (1UL << 11)  // User payload share instead of copy
+#define INTERNAL_FEATURE_LPCY   (1UL << 11)  // copy local copy instead of moving
+// #define INTERNAL_FEATURE_UPSH   (1UL << 12)  // User payload share instead of copy
 
 /* Check if message ID belongs to our protocol */
 #define IS_THIS_PROTOCOL_MSG(id) \
@@ -38,8 +41,11 @@
 #define HAS_FEATURE_IACK(id) \
     (((id) & INTERNAL_FEATURE_IACK) != 0)
 
-#define HAS_FEATURE_UPSH(id) \
-    (((id) & INTERNAL_FEATURE_UPSH) != 0)
+#define HAS_FEATURE_LPCY(id) \
+    (((id) & INTERNAL_FEATURE_LPCY) != 0)
+
+// #define HAS_FEATURE_UPSH(id) \
+//     (((id) & INTERNAL_FEATURE_UPSH) != 0)
 
 /* Check specific message type (ignoring features except internal/external) */
 #define IS_INTERNAL_MSG_TYPE(id, type) \
@@ -134,13 +140,13 @@ typedef struct {
     
     /* Called when a message arrives that doesn't require a response */
     void (*on_message)(mach_server_t *server, client_handle_t client, 
-                       uint32_t msg_type, const void *data, size_t size, void *user_data);
+                       mach_port_t *remote_port, uint32_t msg_type, const void *data, size_t size, void *user_data);
     
     /* Called when a message arrives that requires a response 
      * Return your response data and size. Framework will free it after sending.
      * Return NULL to indicate error. */
     void* (*on_message_with_reply)(mach_server_t *server, client_handle_t client,
-                                   uint32_t msg_type, const void *data, size_t size,
+                                   mach_port_t *remote_port, uint32_t msg_type, const void *data, size_t size,
                                    size_t *reply_size, void *user_data, int *reply_status);
 } server_callbacks_t;
 
@@ -191,11 +197,11 @@ typedef struct {
     void (*on_disconnected)(mach_client_t *client, void *user_data);
     
     /* Called when a message arrives that doesn't require a response */
-    void (*on_message)(mach_client_t *client, uint32_t msg_type,
+    void (*on_message)(mach_client_t *client, mach_port_t *remote_port, uint32_t msg_type,
                        const void *data, size_t size, void *user_data);
     
     /* Called when a message arrives that requires a response */
-    void* (*on_message_with_reply)(mach_client_t *client, uint32_t msg_type,
+    void* (*on_message_with_reply)(mach_client_t *client, mach_port_t *remote_port, uint32_t msg_type,
                                    const void *data, size_t size,
                                    size_t *reply_size, void *user_data, int *reply_status);
 } client_callbacks_t;
@@ -210,9 +216,19 @@ ipc_status_t mach_client_connect(mach_client_t *client, const char *service_name
 /* Check if connected */
 bool mach_client_is_connected(mach_client_t *client);
 
+/* Send a message to server with port (non-blocking) */
+ipc_status_t mach_client_send_with_port(mach_client_t *client, mach_port_t local_port,
+                                        uint32_t msg_type, const void *data, size_t size);
+
 /* Send a message to server (non-blocking) */
 ipc_status_t mach_client_send(mach_client_t *client, uint32_t msg_type,
                               const void *data, size_t size);
+
+/* Send a message and wait for reply (blocking with timeout) */
+ipc_status_t mach_client_send_with_port_and_reply(mach_client_t *client, mach_port_t local_port,
+                                         uint32_t msg_type, const void *data, size_t size,
+                                         const void **reply_data, size_t *reply_size,
+                                         uint32_t timeout_ms);
 
 /* Send a message and wait for reply (blocking with timeout) */
 ipc_status_t mach_client_send_with_reply(mach_client_t *client, uint32_t msg_type,
@@ -243,5 +259,68 @@ void ipc_free(void *ptr);
 
 /* Free payload data */
 void ply_free(void *ptr, size_t size);
+
+/* ============================================================================
+ * SHARED MEMORY
+ * ============================================================================ */
+
+ /* Shared memory handle - opaque to users */
+typedef struct {
+    mach_vm_address_t address;
+    mach_vm_size_t size;
+    mach_port_t mem_object;
+    bool is_owner;  // true if we allocated it, false if we mapped it
+} shared_memory_t;
+
+/**
+ * Allocate shared memory (sender side)
+ * 
+ * @param size Size of memory to allocate
+ * @param out_shmem Output shared memory handle
+ * @return KERN_SUCCESS or error code
+ */
+kern_return_t shared_memory_create(mach_vm_size_t size, shared_memory_t **out_shmem);
+
+/**
+ * Get pointer to shared memory data
+ * 
+ * @param shmem Shared memory handle
+ * @return Pointer to data or NULL
+ */
+void* shared_memory_get_data(shared_memory_t *shmem);
+
+/**
+ * Get size to shared memory data
+ * 
+ * @param shmem Shared memory handle
+ * @return Size of data or zero
+ */
+size_t shared_memory_get_size(shared_memory_t *shmem);
+
+/**
+ * Get memory object port for sending (doesn't transfer ownership)
+ * 
+ * @param shmem Shared memory handle
+ * @return Memory object port
+ */
+mach_port_t shared_memory_get_port(shared_memory_t *shmem);
+
+/**
+ * Map received shared memory (receiver side)
+ * 
+ * @param mem_object Memory object port received
+ * @param size Size of memory
+ * @param out_shmem Output shared memory handle
+ * @return KERN_SUCCESS or error code
+ */
+kern_return_t shared_memory_map(mach_port_t mem_object, mach_vm_size_t size, 
+                                shared_memory_t **out_shmem);
+
+/**
+ * Destroy shared memory
+ * 
+ * @param shmem Shared memory handle
+ */
+void shared_memory_destroy(shared_memory_t *shmem);
 
 #endif /* MACH_IPC_H */

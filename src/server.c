@@ -244,11 +244,13 @@ static void handle_user_message(
     int correlation_slot = payload->correlation_slot;
     uint32_t client_id = client->id;
     struct timespec user_payload_deadline = payload->user_payload_deadline;
+    mach_port_t _remote_port = header->msgh_remote_port;
 
     dispatch_async(client->queue, ^{
         bool user_payload_is_save =
             has_no_deadline(user_payload_deadline) ||
             !is_deadline_expired(user_payload_deadline, USER_PLY_SAFETY_MS);
+        mach_port_t remote_port = _remote_port;
         if (needs_reply) {
             // Message with reply
             if (user_payload_is_save) {
@@ -259,6 +261,7 @@ static void handle_user_message(
                     void *reply_data = server->callbacks.on_message_with_reply(
                         server,
                         (client_handle_t){.id = client_id, .slot = client_slot, .internal = client},
+                        &remote_port,
                         user_msg_type,
                         user_payload,
                         user_payload_size,
@@ -313,6 +316,7 @@ static void handle_user_message(
                     server->callbacks.on_message(
                         server,
                         (client_handle_t){.id = client->id, .slot = client_slot, .internal = client},
+                        &remote_port,
                         user_msg_type,
                         user_payload,
                         user_payload_size,
@@ -324,9 +328,24 @@ static void handle_user_message(
                 LOG_ERROR_MSG("Message with id=%u ignored because the user payload has reached it's deadline", msgh_id);
             }
         }
-        vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+
+        // Cleanup after processing
+        kern_return_t kr;
+        if (remote_port != MACH_PORT_NULL) {
+            kr = mach_port_deallocate(mach_task_self(), remote_port);
+            if (kr != KERN_SUCCESS) {
+                LOG_ERROR_MSG("Failed to clean remote port: 0x%x (%s)", kr, mach_error_string(kr));
+            }
+        }
+        kr = vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+        if (kr != KERN_SUCCESS) {
+            LOG_ERROR_MSG("Failed to clean payload: 0x%x (%s)", kr, mach_error_string(kr));
+        }
         if (user_payload && user_payload_size) {
-            vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+            kr = vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+            if (kr != KERN_SUCCESS) {
+                LOG_ERROR_MSG("Failed to clean user payload: 0x%x (%s)", kr, mach_error_string(kr));
+            }
         }
     });
 }
@@ -382,6 +401,9 @@ static bool server_message_handler(
     if (IS_INTERNAL_MSG(header->msgh_id)) {
         if (IS_INTERNAL_MSG_TYPE(header->msgh_id, INTERNAL_MSG_TYPE_CONNECT)) {
             handle_connect_request(server, header, payload, payload_size);
+            // we wan't auto cleanup except for the port
+            // so we can simply change it to null
+            header->msgh_remote_port = MACH_PORT_NULL;
         }
     } else if (IS_EXTERNAL_MSG(header->msgh_id)) {
         handle_user_message(server, header, payload, payload_size, user_payload, user_payload_size);
@@ -530,7 +552,7 @@ ipc_status_t mach_server_send_with_reply(
     size_t *reply_size,
     uint32_t timeout_ms
 ) {
-    if (!server || !IS_VALID_CLIENT(client) || !reply_data || !reply_size) {
+    if (!server || !IS_VALID_CLIENT(client)) {
         return IPC_ERROR_INVALID_PARAM;
     }
     
@@ -581,17 +603,27 @@ ipc_status_t mach_server_send_with_reply(
 
     if (ack_user_payload && ack_user_size) {
         if (kr == KERN_SUCCESS) {
-            *reply_size = ack_user_size;
-            *reply_data = ack_user_payload;
+            if (reply_size && reply_data) {
+                *reply_size = ack_user_size;
+                *reply_data = ack_user_payload;
+            } else {
+                ply_free((void*)ack_user_payload, ack_user_size);
+            }
             return is_ack_status ? ack_status : IPC_SUCCESS;
         } else {
-            *reply_data = NULL;
-            *reply_size = 0;
+            if (reply_size && reply_data) {
+                *reply_data = NULL;
+                *reply_size = 0;
+            } else {
+                ply_free((void*)ack_user_payload, ack_user_size);
+            }
             vm_deallocate(mach_task_self(), (vm_address_t)ack_user_payload, ack_user_size);
         }
     } else {
-        *reply_data = NULL;
-        *reply_size = 0;
+        if (reply_size && reply_data) {
+            *reply_data = NULL;
+            *reply_size = 0;
+        }
         if (kr == KERN_SUCCESS) {
             return is_ack_status ? ack_status : IPC_SUCCESS;
         }

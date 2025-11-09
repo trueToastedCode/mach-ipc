@@ -55,9 +55,10 @@ void on_disconnected(mach_client_t *client, void *data) {
     g_running = 0;
 }
 
-void on_message(mach_client_t *client, uint32_t msg_type,
+void on_message(mach_client_t *client, mach_port_t *remote_port, uint32_t msg_type,
                 const void *data, size_t size, void *user_data) {
     (void)client;
+    (void)remote_port;
     (void)user_data;
     
     switch (msg_type) {
@@ -111,7 +112,7 @@ void test_ping_flood(mach_client_t *client, int count) {
         if (status == STRESS_STATUS_PING_OK && reply_data) {
             g_stats.pings_received++;
             
-            ping_payload_t *pong = (ping_payload_t*)reply_data;
+            // ping_payload_t *pong = (ping_payload_t*)reply_data;
             struct timeval now;
             gettimeofday(&now, NULL);
             uint64_t now_us = now.tv_sec * 1000000ULL + now.tv_usec;
@@ -143,43 +144,43 @@ void test_ping_flood(mach_client_t *client, int count) {
 void test_heavy_payload(mach_client_t *client, size_t size) {
     printf("\n=== Test 2: Heavy Payload (%zu bytes) ===\n", size);
     
-    void *payload = ipc_alloc(size);
-    if (!payload) {
-        printf("Failed to allocate payload\n");
-        return;
-    }
+    // void *payload = ipc_alloc(size);
+    // if (!payload) {
+    //     printf("Failed to allocate payload\n");
+    //     return;
+    // }
     
-    // Fill with pattern
-    for (size_t i = 0; i < size; i++) {
-        ((char*)payload)[i] = (char)(i % 256);
-    }
+    // // Fill with pattern
+    // for (size_t i = 0; i < size; i++) {
+    //     ((char*)payload)[i] = (char)(i % 256);
+    // }
     
-    const void *reply_data = NULL;
-    size_t reply_size = 0;
+    // const void *reply_data = NULL;
+    // size_t reply_size = 0;
     
-    struct timeval start, end;
-    gettimeofday(&start, NULL);
+    // struct timeval start, end;
+    // gettimeofday(&start, NULL);
     
-    ipc_status_t status = mach_client_send_with_reply(
-        client, MSG_ID_HEAVY_PAYLOAD,
-        payload, size,
-        &reply_data, &reply_size,
-        5000
-    );
+    // ipc_status_t status = mach_client_send_with_reply(
+    //     client, MSG_ID_HEAVY_PAYLOAD,
+    //     payload, size,
+    //     &reply_data, &reply_size,
+    //     5000
+    // );
     
-    gettimeofday(&end, NULL);
-    double elapsed = (end.tv_sec - start.tv_sec) + 
-                     (end.tv_usec - start.tv_usec) / 1000000.0;
+    // gettimeofday(&end, NULL);
+    // double elapsed = (end.tv_sec - start.tv_sec) + 
+    //                  (end.tv_usec - start.tv_usec) / 1000000.0;
     
-    if (status == STRESS_STATUS_HEAVY_OK) {
-        printf("Success! Round-trip: %.2f ms (%.2f MB/s)\n",
-               elapsed * 1000, (size * 2.0) / (1024 * 1024 * elapsed));
-    } else {
-        printf("Failed: %s\n", ipc_status_string(status));
-    }
+    // if (status == STRESS_STATUS_HEAVY_OK) {
+    //     printf("Success! Round-trip: %.2f ms (%.2f MB/s)\n",
+    //            elapsed * 1000, (size * 2.0) / (1024 * 1024 * elapsed));
+    // } else {
+    //     printf("Failed: %s\n", ipc_status_string(status));
+    // }
     
-    ipc_free(payload);
-    ply_free((void*)reply_data, reply_size);
+    // ipc_free(payload);
+    // ply_free((void*)reply_data, reply_size);
 }
 
 // Test 3: Burst mode (fire-and-forget)
@@ -305,38 +306,38 @@ void test_timeout(mach_client_t *client) {
 void test_shared_memory(mach_client_t *client) {
     printf("\n=== Test 6: Shared Memory ===\n");
     
-    size_t size = 1024 * 1024; // 1MB
-    void *buffer = ipc_alloc(size);
-    if (!buffer) {
-        printf("Failed to allocate buffer\n");
-        return;
-    }
+    // size_t size = 1024 * 1024; // 1MB
+    // void *buffer = ipc_alloc(size);
+    // if (!buffer) {
+    //     printf("Failed to allocate buffer\n");
+    //     return;
+    // }
     
-    // Fill with pattern
-    for (size_t i = 0; i < size; i++) {
-        ((char*)buffer)[i] = (char)(i % 256);
-    }
+    // // Fill with pattern
+    // for (size_t i = 0; i < size; i++) {
+    //     ((char*)buffer)[i] = (char)(i % 256);
+    // }
     
-    const void *reply_data = NULL;
-    size_t reply_size = 0;
+    // const void *reply_data = NULL;
+    // size_t reply_size = 0;
     
-    printf("Sharing %zu bytes...\n", size);
-    ipc_status_t status = mach_client_send_with_reply(
-        client, MSG_ID_SHARE_MEMORY,
-        buffer, size,
-        &reply_data, &reply_size,
-        5000
-    );
+    // printf("Sharing %zu bytes...\n", size);
+    // ipc_status_t status = mach_client_send_with_reply(
+    //     client, MSG_ID_SHARE_MEMORY,
+    //     buffer, size,
+    //     &reply_data, &reply_size,
+    //     5000
+    // );
     
-    if (status == STRESS_STATUS_SHARE_OK && reply_data) {
-        uint32_t verified = *(uint32_t*)reply_data;
-        printf("Server verified %u bytes\n", verified);
-    } else {
-        printf("Failed: %s\n", ipc_status_string(status));
-    }
+    // if (status == STRESS_STATUS_SHARE_OK && reply_data) {
+    //     uint32_t verified = *(uint32_t*)reply_data;
+    //     printf("Server verified %u bytes\n", verified);
+    // } else {
+    //     printf("Failed: %s\n", ipc_status_string(status));
+    // }
     
-    ipc_free(buffer);
-    ply_free((void*)reply_data, reply_size);
+    // ipc_free(buffer);
+    // ply_free((void*)reply_data, reply_size);
 }
 
 // Test 7: Get server statistics

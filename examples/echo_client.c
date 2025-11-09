@@ -3,8 +3,14 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <inttypes.h>
 
 static volatile int running = 1;
+
+pthread_mutex_t shmem_lock;
+shared_memory_t *shmem = NULL;
+size_t shmem_size = 4096;
 
 void signal_handler(int sig) {
     (void)sig;
@@ -21,11 +27,18 @@ void on_connected(mach_client_t *client, void *data) {
 void on_disconnected(mach_client_t *client, void *data) {
     (void)client;
     (void)data;
+
     printf("Disconnected from server\n");
+
+    pthread_mutex_lock(&shmem_lock);
+    shared_memory_destroy(shmem);
+    shmem = NULL;
+    pthread_mutex_unlock(&shmem_lock);
+
     running = 0;
 }
 
-void on_message(mach_client_t *client, uint32_t msg_type,
+void on_message(mach_client_t *client, mach_port_t *remote_port, uint32_t msg_type,
                 const void *data, size_t size, void *user_data) {
     (void)client;
     (void)user_data;
@@ -59,39 +72,86 @@ int main() {
         mach_client_destroy(client);
         return 1;
     }
-    
-    const char *echo_message = "Hello World!";
-    size_t echo_message_len = strlen(echo_message) + 1;
-    void *echo_message_buffer = ipc_alloc(echo_message_len);
-    if (!echo_message_buffer) {
-        fprintf(stderr, "Failed to alloc buffer for echo msg");
+
+    // make shmem
+    pthread_mutex_lock(&shmem_lock);
+    kern_return_t kr = shared_memory_create(shmem_size, &shmem);
+    if (kr != KERN_SUCCESS) {
+        fprintf(stderr, "Failed to create shared memory: %s\n", mach_error_string(kr));
+        pthread_mutex_unlock(&shmem_lock);
         mach_client_destroy(client);
         return 1;
     }
-    memcpy(echo_message_buffer, echo_message, echo_message_len);
-    const void *echo_reply = NULL;
-    size_t echo_reply_size = 0;
-
-    printf("Sending: %s\n", echo_message);
-
-    status = mach_client_send_with_reply(
-        client, MSG_ID_ECHO,
-        echo_message_buffer, echo_message_len,
-        &echo_reply, &echo_reply_size,
+    pthread_mutex_unlock(&shmem_lock);
+    printf("[Client] Created shared memory: %zu bytes\n", shmem_size);
+    
+    // map shmem server side
+    pthread_mutex_lock(&shmem_lock);
+    if (!shmem) {
+        // (disconnected)
+        printf("Set echo shm failed because shmem doesnt't exist any more");
+        pthread_mutex_unlock(&shmem_lock);
+        mach_client_destroy(client);
+        return 1;
+    }
+    status = mach_client_send_with_port_and_reply(
+        client,
+        shared_memory_get_port(shmem),
+        MSG_ID_SET_ECHO_SHM,
+        (const void*)&shmem_size,
+        sizeof(shmem_size),
+        NULL,
+        NULL,
         2000
     );
-    
-    printf("Silent msg status: %s\n", ipc_status_string(status));
-    if (status == ECHO_CUSTOM_STATUS && echo_reply) {
-        printf("Echo reply: %s\n", (char*)echo_reply);
-    } else {
-        printf("Echo failed: %s\n", ipc_status_string(status));
+    pthread_mutex_unlock(&shmem_lock);
+    if (status != IPC_SUCCESS) {
+        printf("Set echo shm failed: %s\n", ipc_status_string(status));
+        mach_client_destroy(client);
+        return 1;
     }
 
-    ipc_free(echo_message_buffer);
-    ply_free((void*)echo_reply, echo_reply_size);
+    // Write data to shared memory
+    pthread_mutex_lock(&shmem_lock);
+    if (!shmem) {
+        // (disconnected)
+        printf("Set echo shm failed because shmem doesnt't exist any more");
+        pthread_mutex_unlock(&shmem_lock);
+        mach_client_destroy(client);
+        return 1;
+    }
+    const char *echo_message = "Hello from client! Data in shared memory.";
+    size_t echo_message_len = strlen(echo_message) + 1;
+    snprintf(shared_memory_get_data(shmem), shmem_size, "%s", echo_message);
+    pthread_mutex_unlock(&shmem_lock);
 
-    sleep(1);
+    // Sent echo event
+    status = mach_client_send_with_reply(
+        client,
+        MSG_ID_ECHO,
+        NULL,
+        0,
+        NULL,
+        NULL,
+        2000
+    );
+    if (status != ECHO_CUSTOM_STATUS) {
+        printf("Send echo failed: %s\n", ipc_status_string(status));
+        mach_client_destroy(client);
+        return 1;
+    }
+
+    // read back the echo
+    pthread_mutex_lock(&shmem_lock);
+    if (!shmem) {
+        // (disconnected)
+        printf("Set echo shm failed because shmem doesnt't exist any more");
+        pthread_mutex_unlock(&shmem_lock);
+        mach_client_destroy(client);
+        return 1;
+    }
+    printf("Server: %.*s\n", (int)shared_memory_get_size(shmem), (char*)shared_memory_get_data(shmem));
+    pthread_mutex_unlock(&shmem_lock);
 
     const char *silent_message = "Hello from client!";
     printf("Sending: %s\n", silent_message);

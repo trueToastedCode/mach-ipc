@@ -42,7 +42,7 @@
 
 kern_return_t protocol_send_message(
     mach_port_t dest_port,
-    mach_port_t reply_port,
+    mach_port_t local_port,
     mach_msg_id_t msg_id,
     internal_payload_t *payload,
     size_t payload_size,
@@ -59,30 +59,34 @@ kern_return_t protocol_send_message(
         payload->correlation_id = 0;
         payload->correlation_slot = -1;
     }
+
+    if (local_port == MACH_PORT_NULL) {
+        msg_id = UNSET_FEATURE(msg_id, INTERNAL_FEATURE_LPCY);
+    }
     
     internal_mach_msg_t msg;
     memset(&msg, 0, sizeof(msg));
     
     // Set up header
-    msg.header.msgh_bits = reply_port
-        ? (MACH_MSGH_BITS_COMPLEX | 
-           MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MOVE_SEND))
+    msg.header.msgh_bits = (local_port)
+        ? (
+            HAS_FEATURE_LPCY(msg_id)
+            ? (MACH_MSGH_BITS_COMPLEX | 
+               MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_COPY_SEND))
+            : (MACH_MSGH_BITS_COMPLEX | 
+               MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MOVE_SEND))
+        )
         : (MACH_MSGH_BITS_COMPLEX | 
            MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0));
     msg.header.msgh_size = sizeof(msg);
     msg.header.msgh_remote_port = dest_port;
-    msg.header.msgh_local_port = reply_port;
+    msg.header.msgh_local_port = local_port;
     msg.header.msgh_id = msg_id;
     
     // Set up body and OOL descriptor
     msg.body.msgh_descriptor_count = 2;
 
-    if (
-        HAS_FEATURE_UPSH(msg_id)&& 
-        payload &&
-        payload_size &&
-        user_payload_tio_ms
-    ) {
+    if (user_payload_tio_ms) {
         if (user_payload_tio_ms < USER_PLY_SAFETY_MS) {
             LOG_ERROR_MSG("Timeout for shared user payload must at least be the safety "
                           "margin of %" PRIu64 "ms", USER_PLY_SAFETY_MS);
@@ -101,12 +105,7 @@ kern_return_t protocol_send_message(
     
     msg.user_payload.address = (void*)user_payload;
     msg.user_payload.size = user_payload_size;
-    msg.user_payload.copy = HAS_FEATURE_UPSH(msg_id)
-        // Send memory object handle instead of copying data
-        // Receiver maps it directly into their address space
-        ? (MAP_MEM_VM_SHARE | VM_PROT_READ)
-        // Copy data
-        : (MACH_MSG_VIRTUAL_COPY);
+    msg.user_payload.copy = MACH_MSG_VIRTUAL_COPY;
     msg.user_payload.deallocate = false;
     msg.user_payload.type = MACH_MSG_OOL_DESCRIPTOR;
     
@@ -338,7 +337,7 @@ kern_return_t protocol_send_ack(
     // upsh not save right now
     // user payload in ack is allocated in the ack handle
     // but after being sent immediately set free
-    ack_msg_id = UNSET_FEATURE(ack_msg_id, INTERNAL_FEATURE_UPSH);
+    // ack_msg_id = UNSET_FEATURE(ack_msg_id, INTERNAL_FEATURE_UPSH);
     
     return protocol_send_message(dest_port, MACH_PORT_NULL, 
                                  ack_msg_id, ack_payload, ack_payload_size,
@@ -493,11 +492,25 @@ void protocol_receive_loop(
                 continue;
             }
         }
-        
+
+        // Clean up remote port
+        if (header->msgh_remote_port != MACH_PORT_NULL) {
+            kr = mach_port_deallocate(mach_task_self(), header->msgh_remote_port);
+            if (kr != KERN_SUCCESS) {
+                LOG_ERROR_MSG("Failed to clean remote port: 0x%x (%s)", kr, mach_error_string(kr));
+            }
+        }
+
         // Cleanup OOL memory
-        vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+        kr = vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+        if (kr != KERN_SUCCESS) {
+            LOG_ERROR_MSG("Failed to clean payload: 0x%x (%s)", kr, mach_error_string(kr));
+        }
         if (user_payload && user_payload_size) {
-            vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+            kr = vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+            if (kr != KERN_SUCCESS) {
+                LOG_ERROR_MSG("Failed to clean user payload: 0x%x (%s)", kr, mach_error_string(kr));
+            }
         }
     }
     

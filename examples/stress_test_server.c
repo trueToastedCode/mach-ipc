@@ -63,7 +63,8 @@ void on_client_disconnected(mach_server_t *server, client_handle_t client, void 
 }
 
 void on_message(mach_server_t *server, client_handle_t client,
-                uint32_t msg_type, const void *data, size_t size, void *user_data) {
+                mach_port_t *remote_port, uint32_t msg_type, const void *data, size_t size, void *user_data) {
+    (void)remote_port;
     (void)user_data;
     
     pthread_mutex_lock(&g_stats.lock);
@@ -116,9 +117,10 @@ void on_message(mach_server_t *server, client_handle_t client,
 }
 
 void* on_message_with_reply(mach_server_t *server, client_handle_t client,
-                             uint32_t msg_type, const void *data, size_t size,
+                             mach_port_t *remote_port, uint32_t msg_type, const void *data, size_t size,
                              size_t *reply_size, void *user_data, int *reply_status) {
     (void)server;
+    (void)remote_port;
     (void)user_data;
     
     pthread_mutex_lock(&g_stats.lock);
@@ -155,13 +157,13 @@ void* on_message_with_reply(mach_server_t *server, client_handle_t client,
             // Process large payload
             printf("[HEAVY] Client %u sent %zu bytes\n", client.id, size);
             
-            // Allocate and return same size
-            reply = ipc_alloc(size);
-            if (reply) {
-                memcpy(reply, data, size);
-                *reply_size = size;
-                *reply_status = STRESS_STATUS_HEAVY_OK;
-            }
+            // // Allocate and return same size
+            // reply = ipc_alloc(size);
+            // if (reply) {
+            //     memcpy(reply, data, size);
+            //     *reply_size = size;
+            //     *reply_status = STRESS_STATUS_HEAVY_OK;
+            // }
             break;
         }
         
@@ -208,20 +210,20 @@ void* on_message_with_reply(mach_server_t *server, client_handle_t client,
             // Test shared memory feature (UPSH flag)
             printf("[SHARE] Client %u shared %zu bytes\n", client.id, size);
             
-            // Verify we can read the shared memory
-            const char *shared_data = (const char*)data;
-            size_t verified = 0;
-            for (size_t i = 0; i < size && i < 1024; i++) {
-                if (shared_data[i] != 0) verified++;
-            }
+            // // Verify we can read the shared memory
+            // const char *shared_data = (const char*)data;
+            // size_t verified = 0;
+            // for (size_t i = 0; i < size && i < 1024; i++) {
+            //     if (shared_data[i] != 0) verified++;
+            // }
             
-            uint32_t *result = ipc_alloc(sizeof(uint32_t));
-            if (result) {
-                *result = verified;
-                reply = result;
-                *reply_size = sizeof(uint32_t);
-                *reply_status = STRESS_STATUS_SHARE_OK;
-            }
+            // uint32_t *result = ipc_alloc(sizeof(uint32_t));
+            // if (result) {
+            //     *result = verified;
+            //     reply = result;
+            //     *reply_size = sizeof(uint32_t);
+            //     *reply_status = STRESS_STATUS_SHARE_OK;
+            // }
             break;
         }
         

@@ -38,11 +38,13 @@ static void handle_user_message(
     uint32_t client_id = client->client_id;
     int client_slot = client->client_slot;
     struct timespec user_payload_deadline = payload->user_payload_deadline;
+    mach_port_t _remote_port = header->msgh_remote_port;
     
     dispatch_async(client->message_queue, ^{
         bool user_payload_is_save =
             has_no_deadline(user_payload_deadline) ||
             !is_deadline_expired(user_payload_deadline, USER_PLY_SAFETY_MS);
+        mach_port_t remote_port = _remote_port;
         if (needs_reply) {
             // Message with reply
             if (user_payload_is_save) {
@@ -51,6 +53,7 @@ static void handle_user_message(
                     int reply_status = IPC_SUCCESS;
                     void *reply_data = client->callbacks.on_message_with_reply(
                         client,
+                        &remote_port,
                         user_msg_type,
                         user_payload,
                         user_payload_size,
@@ -104,6 +107,7 @@ static void handle_user_message(
                 if (client->callbacks.on_message) {
                     client->callbacks.on_message(
                         client,
+                        &remote_port,
                         user_msg_type,
                         user_payload,
                         user_payload_size,
@@ -116,10 +120,23 @@ static void handle_user_message(
             }
         }
         
-        // Cleanup payload after processing
-        vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+        // Cleanup after processing
+        kern_return_t kr;
+        if (remote_port != MACH_PORT_NULL) {
+            kr = mach_port_deallocate(mach_task_self(), remote_port);
+            if (kr != KERN_SUCCESS) {
+                LOG_ERROR_MSG("Failed to clean remote port: 0x%x (%s)", kr, mach_error_string(kr));
+            }
+        }
+        kr = vm_deallocate(mach_task_self(), (vm_address_t)payload, payload_size);
+        if (kr != KERN_SUCCESS) {
+            LOG_ERROR_MSG("Failed to clean payload: 0x%x (%s)", kr, mach_error_string(kr));
+        }
         if (user_payload && user_payload_size) {
-            vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+            kr = vm_deallocate(mach_task_self(), (vm_address_t)user_payload, user_payload_size);
+            if (kr != KERN_SUCCESS) {
+                LOG_ERROR_MSG("Failed to clean user payload: 0x%x (%s)", kr, mach_error_string(kr));
+            }
         }
     });
 }
@@ -391,8 +408,9 @@ bool mach_client_is_connected(mach_client_t *client) {
     return client && client->connected;
 }
 
-ipc_status_t mach_client_send(
+ipc_status_t mach_client_send_with_port(
     mach_client_t *client,
+    mach_port_t local_port,
     uint32_t msg_type,
     const void *data,
     size_t size
@@ -409,7 +427,7 @@ ipc_status_t mach_client_send(
     
     kern_return_t kr = protocol_send_message(
         client->server_port,
-        MACH_PORT_NULL,
+        local_port,
         MSG_ID_USER(msg_type),
         &payload,
         sizeof(payload),
@@ -421,8 +439,24 @@ ipc_status_t mach_client_send(
     return kr == KERN_SUCCESS ? IPC_SUCCESS : IPC_ERROR_SEND_FAILED;
 }
 
-ipc_status_t mach_client_send_with_reply(
+ipc_status_t mach_client_send(
     mach_client_t *client,
+    uint32_t msg_type,
+    const void *data,
+    size_t size
+) {
+    return mach_client_send_with_port(
+        client,
+        MACH_PORT_NULL,
+        msg_type,
+        data,
+        size
+    );
+}
+
+ipc_status_t mach_client_send_with_port_and_reply(
+    mach_client_t *client,
+    mach_port_t local_port,
     uint32_t msg_type,
     const void *data,
     size_t size,
@@ -430,7 +464,7 @@ ipc_status_t mach_client_send_with_reply(
     size_t *reply_size,
     uint32_t timeout_ms
 ) {
-    if (!client || !client->connected || !reply_data || !reply_size) {
+    if (!client || !client->connected) {
         return IPC_ERROR_INVALID_PARAM;
     }
     
@@ -447,7 +481,7 @@ ipc_status_t mach_client_send_with_reply(
     
     kern_return_t kr = protocol_send_with_ack(
         client->server_port,
-        MACH_PORT_NULL,
+        local_port,
         &client->ack_pool,
         &client->ack_lock,
         &client->next_correlation_id,
@@ -476,23 +510,54 @@ ipc_status_t mach_client_send_with_reply(
 
     if (ack_user_payload && ack_user_size) {
         if (kr == KERN_SUCCESS) {
-            *reply_size = ack_user_size;
-            *reply_data = ack_user_payload;
+            if (reply_size && reply_data) {
+                *reply_size = ack_user_size;
+                *reply_data = ack_user_payload;
+            } else {
+                ply_free((void*)ack_user_payload, ack_user_size);
+            }
             return is_ack_status ? ack_status : IPC_SUCCESS;
         } else {
-            *reply_data = NULL;
-            *reply_size = 0;
+            if (reply_size && reply_data) {
+                *reply_data = NULL;
+                *reply_size = 0;
+            } else {
+                ply_free((void*)ack_user_payload, ack_user_size);
+            }
         }
         vm_deallocate(mach_task_self(), (vm_address_t)ack_user_payload, ack_user_size);
     } else {
-        *reply_data = NULL;
-        *reply_size = 0;
+        if (reply_size && reply_data) {
+            *reply_data = NULL;
+            *reply_size = 0;
+        }
         if (kr == KERN_SUCCESS) {
             return is_ack_status ? ack_status : IPC_SUCCESS;
         }
     }
     
     return kr == KERN_OPERATION_TIMED_OUT ? IPC_ERROR_TIMEOUT : IPC_ERROR_SEND_FAILED;
+}
+
+ipc_status_t mach_client_send_with_reply(
+    mach_client_t *client,
+    uint32_t msg_type,
+    const void *data,
+    size_t size,
+    const void **reply_data,
+    size_t *reply_size,
+    uint32_t timeout_ms
+) {
+    return mach_client_send_with_port_and_reply(
+        client,
+        MACH_PORT_NULL,
+        msg_type,
+        data,
+        size,
+        reply_data,
+        reply_size,
+        timeout_ms
+    );
 }
 
 void mach_client_disconnect(mach_client_t *client) {

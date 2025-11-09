@@ -4,6 +4,7 @@
 
 #include "mach_ipc.h"
 #include "internal.h"
+#include "log.h"
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
@@ -157,4 +158,131 @@ bool is_deadline_expired(struct timespec deadline, uint64_t safety_ms) {
 
 bool has_no_deadline(struct timespec deadline) {
     return deadline.tv_sec == 0 && deadline.tv_nsec == 0;
+}
+
+kern_return_t shared_memory_create(mach_vm_size_t size, shared_memory_t **out_shmem) {
+    if (!out_shmem || size == 0) {
+        return KERN_INVALID_ARGUMENT;
+    }
+    
+    shared_memory_t *shmem = calloc(1, sizeof(shared_memory_t));
+    if (!shmem) {
+        return KERN_NO_SPACE;
+    }
+    
+    // Allocate memory
+    kern_return_t kr = mach_vm_allocate(mach_task_self(), &shmem->address, 
+                                        size, VM_FLAGS_ANYWHERE);
+    if (kr != KERN_SUCCESS) {
+        LOG_ERROR_MSG("Failed to allocate VM: %s", mach_error_string(kr));
+        free(shmem);
+        return kr;
+    }
+    
+    // Create memory entry (memory object port)
+    memory_object_size_t mem_size = size;
+    kr = mach_make_memory_entry_64(
+        mach_task_self(),
+        &mem_size,
+        shmem->address,
+        VM_PROT_READ | VM_PROT_WRITE,
+        &shmem->mem_object,
+        MACH_PORT_NULL
+    );
+    
+    if (kr != KERN_SUCCESS) {
+        LOG_ERROR_MSG("Failed to create memory entry: %s", mach_error_string(kr));
+        mach_vm_deallocate(mach_task_self(), shmem->address, size);
+        free(shmem);
+        return kr;
+    }
+    
+    shmem->size = size;
+    shmem->is_owner = true;
+    
+    LOG_DEBUG_MSG("Created shared memory: addr=0x%llx, size=%llu, port=%u",
+                  shmem->address, shmem->size, shmem->mem_object);
+    
+    *out_shmem = shmem;
+    return KERN_SUCCESS;
+}
+
+void* shared_memory_get_data(shared_memory_t *shmem) {
+    return shmem ? (void*)shmem->address : NULL;
+}
+
+size_t shared_memory_get_size(shared_memory_t *shmem) {
+    return shmem ? (size_t)shmem->size : 0;
+}
+
+mach_port_t shared_memory_get_port(shared_memory_t *shmem) {
+    return shmem ? shmem->mem_object : MACH_PORT_NULL;
+}
+
+kern_return_t shared_memory_map(mach_port_t mem_object, mach_vm_size_t size,
+                                shared_memory_t **out_shmem) {
+    if (!out_shmem || mem_object == MACH_PORT_NULL || size == 0) {
+        return KERN_INVALID_ARGUMENT;
+    }
+    
+    shared_memory_t *shmem = calloc(1, sizeof(shared_memory_t));
+    if (!shmem) {
+        return KERN_NO_SPACE;
+    }
+    
+    // Map the memory object into our address space
+    kern_return_t kr = mach_vm_map(
+        mach_task_self(),
+        &shmem->address,
+        size,
+        0,  // mask
+        VM_FLAGS_ANYWHERE,
+        mem_object,
+        0,  // offset
+        FALSE,  // copy
+        VM_PROT_READ | VM_PROT_WRITE,
+        VM_PROT_READ | VM_PROT_WRITE,
+        VM_INHERIT_NONE
+    );
+    
+    if (kr != KERN_SUCCESS) {
+        LOG_ERROR_MSG("Failed to map shared memory: %s", mach_error_string(kr));
+        free(shmem);
+        return kr;
+    }
+    
+    shmem->size = size;
+    shmem->mem_object = mem_object;
+    shmem->is_owner = false;
+    
+    LOG_DEBUG_MSG("Mapped shared memory: addr=0x%llx, size=%llu, port=%u",
+                  shmem->address, shmem->size, shmem->mem_object);
+    
+    *out_shmem = shmem;
+    return KERN_SUCCESS;
+}
+
+void shared_memory_destroy(shared_memory_t *shmem) {
+    if (!shmem) return;
+
+    LOG_DEBUG_MSG("Destroying shared memory: addr=0x%llx, size=%llu, is_owner=%d",
+                  shmem->address, shmem->size, shmem->is_owner);
+    
+    // Unmap/deallocate the memory
+    if (shmem->address != 0) {
+        kern_return_t kr = mach_vm_deallocate(mach_task_self(), shmem->address, shmem->size);
+        if (kr != KERN_SUCCESS) {
+            LOG_ERROR_MSG("Failed to deallocate memory: %s", mach_error_string(kr));
+        }
+    }
+    
+    // Deallocate the memory object port
+    if (shmem->mem_object != MACH_PORT_NULL) {
+        kern_return_t kr = mach_port_deallocate(mach_task_self(), shmem->mem_object);
+        if (kr != KERN_SUCCESS) {
+            LOG_ERROR_MSG("Failed to deallocate port: %s", mach_error_string(kr));
+        }
+    }
+    
+    free(shmem);
 }
