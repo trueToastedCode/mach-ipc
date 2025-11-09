@@ -155,6 +155,8 @@ mach_server_t* mach_server_create(const char *service_name,
                                    const server_callbacks_t *callbacks,
                                    void *user_data);
 
+size_t mach_server_max_clients(mach_server_t *server);
+
 /* Start the server (blocks until stopped or error) */
 ipc_status_t mach_server_run(mach_server_t *server);
 

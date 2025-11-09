@@ -478,6 +478,12 @@ mach_server_t* mach_server_create(
     return server;
 }
 
+size_t mach_server_max_clients(mach_server_t *server) {
+    return server 
+        ? (sizeof(server->clients) / sizeof(server->clients[0]))
+        : 0;
+}
+
 ipc_status_t mach_server_run(mach_server_t *server) {
     if (!server) return IPC_ERROR_INVALID_PARAM;
     

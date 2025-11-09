@@ -47,6 +47,7 @@ FRAMEWORK_SRCS = \
     $(SRC_DIR)/protocol.c \
     $(SRC_DIR)/resources.c \
     $(SRC_DIR)/pool.c \
+	$(SRC_DIR)/linear_ts_pool.c \
     $(SRC_DIR)/utils.c
 
 FRAMEWORK_OBJS = $(FRAMEWORK_SRCS:$(SRC_DIR)/%.c=$(BUILD_DIR)/%.o)
@@ -56,6 +57,7 @@ FRAMEWORK_HDRS = \
     $(INC_DIR)/mach_ipc.h \
     $(SRC_DIR)/internal.h \
     $(SRC_DIR)/pool.h \
+	$(SRC_DIR)/linear_ts_pool.h \
     $(SRC_DIR)/event_framework.h \
     $(SRC_DIR)/log.h
 

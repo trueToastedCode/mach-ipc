@@ -34,6 +34,7 @@ void on_disconnected(mach_client_t *client, void *data) {
     shared_memory_destroy(shmem);
     shmem = NULL;
     pthread_mutex_unlock(&shmem_lock);
+    pthread_mutex_destroy(&shmem_lock);
 
     running = 0;
 }
@@ -50,7 +51,9 @@ void on_message(mach_client_t *client, mach_port_t *remote_port, uint32_t msg_ty
 int main() {
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
-    
+
+    pthread_mutex_init(&shmem_lock, NULL);
+
     set_user_ipc_status_string(echo_status_string);
 
     client_callbacks_t callbacks = {
@@ -63,6 +66,7 @@ int main() {
     mach_client_t *client = mach_client_create(&callbacks, NULL);
     if (!client) {
         fprintf(stderr, "Failed to create client\n");
+        pthread_mutex_destroy(&shmem_lock);
         return 1;
     }
     
@@ -70,6 +74,7 @@ int main() {
     if (status != IPC_SUCCESS) {
         fprintf(stderr, "Failed to connect: %s\n", ipc_status_string(status));
         mach_client_destroy(client);
+        pthread_mutex_destroy(&shmem_lock);
         return 1;
     }
 
